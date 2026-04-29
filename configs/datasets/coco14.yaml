@@ -1,0 +1,6 @@
+DATASET:
+  NAME: COCO14
+  SOURCE_DOMAINS:
+    - train
+  TARGET_DOMAINS:
+    - val

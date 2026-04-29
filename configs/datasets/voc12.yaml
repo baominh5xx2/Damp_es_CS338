@@ -1,0 +1,6 @@
+DATASET:
+  NAME: VOC12
+  SOURCE_DOMAINS:
+    - train
+  TARGET_DOMAINS:
+    - trainval

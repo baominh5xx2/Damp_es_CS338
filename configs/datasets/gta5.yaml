@@ -1,0 +1,6 @@
+DATASET:
+  NAME: GTA5
+  SOURCE_DOMAINS:
+    - gta5_train
+  TARGET_DOMAINS:
+    - cityscapes_train

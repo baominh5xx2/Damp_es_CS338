@@ -1,0 +1,25 @@
+# Core
+torch
+torchvision
+numpy
+Pillow
+opencv-python
+tqdm
+matplotlib
+scikit_learn
+
+# CLIP / tokenizer
+ftfy
+regex
+
+# DAMP stack
+timm
+yacs
+datasets
+huggingface_hub
+git+https://github.com/KaiyangZhou/Dassl.pytorch.git
+
+# CLIP-ES stack (CAM + CRF + XML)
+pydensecrf
+lxml
+ttach

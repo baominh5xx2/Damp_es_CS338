@@ -1,0 +1,6 @@
+DATASET:
+  NAME: SYNTHIA
+  SOURCE_DOMAINS:
+    - synthia_train
+  TARGET_DOMAINS:
+    - cityscapes_train
