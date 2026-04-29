@@ -201,20 +201,32 @@ def test_damp_trainer_init():
     from dassl.engine import build_trainer
     trainer = build_trainer(cfg)
 
-    assert trainer.num_classes > 1, f"num_classes={trainer.num_classes}, expected >1"
+    assert trainer.num_classes == 16, f"num_classes={trainer.num_classes}, expected 16"
+    assert trainer.n_cls == 16, f"n_cls={trainer.n_cls}, expected 16"
     assert trainer.n_cls == trainer.num_classes, (
         f"n_cls={trainer.n_cls} != num_classes={trainer.num_classes}"
     )
     print(f"  num_classes={trainer.num_classes}, n_cls={trainer.n_cls}")
     print(f"  multi_label_lookup size: {len(trainer.multi_label_lookup)}")
 
-    has_synthia = any("synthia" in k.lower() for k in trainer.multi_label_lookup)
+    def _is_synthia_path(p):
+        norm = p.replace("\\", "/").lower()
+        return "/synthia/images/" in norm
+
+    has_synthia = any(_is_synthia_path(k) for k in trainer.multi_label_lookup)
     print(f"  has synthia entries in lookup: {has_synthia}")
     assert has_synthia, "No SYNTHIA entries in multi_label_lookup"
 
-    for k, v in list(trainer.multi_label_lookup.items())[:2]:
-        nonzero = (v > 0).sum().item()
-        print(f"    {osp.basename(k)}: {nonzero} active labels, vec={v.tolist()}")
+    for k, v in trainer.multi_label_lookup.items():
+        if _is_synthia_path(k):
+            active = (v > 0).nonzero(as_tuple=True)[0].tolist()
+            assert len(active) == 6, (
+                f"SYNTHIA {osp.basename(k)}: expected 6 active labels, got {len(active)}: {active}"
+            )
+            assert active == [0, 1, 8, 9, 12, 15], (
+                f"SYNTHIA {osp.basename(k)}: wrong label IDs {active}"
+            )
+            print(f"    {osp.basename(k)}: {len(active)} active labels, ids={active}")
 
     print("  [PASS] DAMP trainer init OK")
     return trainer

@@ -69,11 +69,11 @@ class SYNTHIA(DatasetBase):
         )
         test = self._read_data(test_domains)
 
-        train_x, train_u, test = self._remap_labels_to_contiguous(
-            train_x, train_u, test
-        )
-
         super().__init__(train_x=train_x, train_u=train_u, test=test)
+
+        self._num_classes = self.NUM_CLASSES
+        self._lab2cname = {i: self.CLASS_NAMES[i] for i in range(self.NUM_CLASSES)}
+        self._classnames = list(self.CLASS_NAMES)
 
     @staticmethod
     def _first_existing_dir(candidates, default):
@@ -236,27 +236,3 @@ class SYNTHIA(DatasetBase):
 
         return items
 
-    def _remap_labels_to_contiguous(self, train_x, train_u, test):
-        all_items = train_x + train_u + test
-        if not all_items:
-            return train_x, train_u, test
-
-        raw_labels = sorted({int(item.label) for item in all_items})
-        label_map = {raw_label: idx for idx, raw_label in enumerate(raw_labels)}
-
-        def _remap(items):
-            remapped = []
-            for item in items:
-                raw_label = int(item.label)
-                new_label = label_map[raw_label]
-                remapped.append(
-                    Datum(
-                        impath=item.impath,
-                        label=new_label,
-                        domain=item.domain,
-                        classname=item.classname,
-                    )
-                )
-            return remapped
-
-        return _remap(train_x), _remap(train_u), _remap(test)
