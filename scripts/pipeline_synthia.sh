@@ -39,14 +39,30 @@ echo " DATA_ROOT:  ${DATA_ROOT}"
 echo " OUTPUT_DIR: ${OUTPUT_DIR}"
 echo "============================================"
 
-# ---- Step 0: Build multilabel.json for SYNTHIA ----
+# ---- Step 0a: Build multilabel.json for SYNTHIA ----
 echo ""
-echo "[Step 0] Building multilabel.json for SYNTHIA ..."
+echo "[Step 0a] Building multilabel.json for SYNTHIA ..."
 MULTILABEL_DIR="${DATA_ROOT}/data/processed/synthia_multilabel"
 python tools/build_synthia_multilabel.py \
     --split-file "${SYNTHIA_SPLIT}" \
     --label-dir "${SYNTHIA_LBL}" \
     --output-dir "${MULTILABEL_DIR}"
+
+# ---- Step 0b: Build multilabel.json for Cityscapes (train + val) ----
+echo ""
+echo "[Step 0b] Building multilabel.json for Cityscapes ..."
+CITY_ML_DIR="${DATA_ROOT}/data/processed/cityscapes_multilabel"
+python tools/build_cityscapes_multilabel.py \
+    --split-file "${CITY_ROOT}/splits/train.txt" \
+    --label-dir "${CITY_LBL}" \
+    --output-dir "${CITY_ML_DIR}" \
+    --output-file train_multilabel.json
+
+python tools/build_cityscapes_multilabel.py \
+    --split-file "${CITY_VAL_SPLIT}" \
+    --label-dir "${CITY_LBL}" \
+    --output-dir "${CITY_ML_DIR}" \
+    --output-file val_multilabel.json
 
 # ---- Step 1: Train DAMP prompts (SYNTHIA → Cityscapes) ----
 echo ""

@@ -82,14 +82,30 @@ Damp_es/
 ### 4. Build multilabel index (REQUIRED before training)
 
 ```bash
+# SYNTHIA multilabel
 !python tools/build_synthia_multilabel.py \
     --split-file /content/data/raw/synthia/splits/train.txt \
     --label-dir /content/data/raw/synthia/labels \
     --output-dir /content/data/processed/synthia_multilabel \
     --num-workers 8
+
+# Cityscapes multilabel (train + val, needed for evaluation)
+!python tools/build_cityscapes_multilabel.py \
+    --split-file /content/data/raw/cityscapes/splits/train.txt \
+    --label-dir /content/data/raw/cityscapes/labels \
+    --output-dir /content/data/processed/cityscapes_multilabel \
+    --output-file train_multilabel.json \
+    --num-workers 8
+
+!python tools/build_cityscapes_multilabel.py \
+    --split-file /content/data/raw/cityscapes/splits/val.txt \
+    --label-dir /content/data/raw/cityscapes/labels \
+    --output-dir /content/data/processed/cityscapes_multilabel \
+    --output-file val_multilabel.json \
+    --num-workers 8
 ```
 
-> **Without this step, training will only detect 1 class instead of 16.**
+> **Without this step, training will only detect 1 class and evaluation metrics will be 0%.**
 
 ### 5. Train DAMP
 
@@ -169,8 +185,11 @@ After steps 2-3, the directory should look like:
 │           ├── train.txt
 │           └── val.txt
 └── processed/
-    └── synthia_multilabel/
-        └── multilabel.json  # {filename: [cit19_ids]} - built by step 4
+    ├── synthia_multilabel/
+    │   └── multilabel.json          # {filename: [cit19_ids]} - built by step 4
+    └── cityscapes_multilabel/
+        ├── train_multilabel.json    # {filename: [cit19_ids]} - built by step 4
+        └── val_multilabel.json      # {filename: [cit19_ids]} - built by step 4
 ```
 
 ## SYNTHIA 16-class Label Mapping
