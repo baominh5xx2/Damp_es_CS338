@@ -13,10 +13,10 @@ Output layout:
 """
 
 import argparse
-import json
 import os
 import os.path as osp
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 from PIL import Image
@@ -28,13 +28,38 @@ SYNTHIA_16_TO_CITYSCAPES_19 = {
     13: 15, 14: 17, 15: 18,
 }
 
+_REMAP_LUT = np.full(256, 255, dtype=np.uint8)
+for _src, _dst in SYNTHIA_16_TO_CITYSCAPES_19.items():
+    _REMAP_LUT[_src] = _dst
+
 
 def remap_label(label_np):
     """Remap SYNTHIA 16-class IDs [0..15] to Cityscapes 19-class train IDs."""
-    out = np.full(label_np.shape, 255, dtype=np.uint8)
-    for src_id, dst_id in SYNTHIA_16_TO_CITYSCAPES_19.items():
-        out[label_np == src_id] = dst_id
-    return out
+    return _REMAP_LUT[label_np.astype(np.uint8)]
+
+
+def _process_row(args_tuple):
+    """Worker function: decode image+label bytes, remap, save to disk."""
+    global_idx, img_bytes, lbl_bytes, images_dir, labels_dir, skip_existing = args_tuple
+
+    fname = f"train_{global_idx:06d}.png"
+    image_out = osp.join(images_dir, fname)
+    label_out = osp.join(labels_dir, fname)
+
+    if skip_existing and osp.isfile(image_out) and osp.isfile(label_out):
+        return global_idx, fname
+
+    img = _to_pil(img_bytes).convert("RGB")
+    img.save(image_out)
+
+    lbl = _to_pil(lbl_bytes)
+    lbl_np = np.array(lbl)
+    if lbl_np.ndim == 3:
+        lbl_np = lbl_np[:, :, 0]
+    lbl_remapped = remap_label(lbl_np)
+    Image.fromarray(lbl_remapped, mode="L").save(label_out)
+
+    return global_idx, fname
 
 
 def main(args):
@@ -63,51 +88,57 @@ def main(args):
 
     print(f"Found {len(parquet_files)} parquet shards")
 
-    filenames = []
+    num_workers = args.num_workers
+    filenames = {}
     global_idx = 0
     start = time.time()
+    total_submitted = 0
 
-    for shard_idx, pf in enumerate(parquet_files):
-        table = pq.read_table(pf)
-        n_rows = table.num_rows
-        print(f"Shard {shard_idx+1}/{len(parquet_files)}: {osp.basename(pf)} ({n_rows} rows)")
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {}
 
-        for row_idx in range(n_rows):
-            fname = f"train_{global_idx:06d}.png"
-            image_out = osp.join(images_dir, fname)
-            label_out = osp.join(labels_dir, fname)
+        for shard_idx, pf in enumerate(parquet_files):
+            table = pq.read_table(pf)
+            n_rows = table.num_rows
+            print(f"Shard {shard_idx+1}/{len(parquet_files)}: "
+                  f"{osp.basename(pf)} ({n_rows} rows)")
 
-            if args.skip_existing and osp.isfile(image_out) and osp.isfile(label_out):
-                filenames.append(fname)
+            img_col = table.column("image")
+            lbl_col = table.column("label")
+
+            for row_idx in range(n_rows):
+                img_val = img_col[row_idx].as_py()
+                lbl_val = lbl_col[row_idx].as_py()
+
+                fut = executor.submit(
+                    _process_row,
+                    (global_idx, img_val, lbl_val,
+                     images_dir, labels_dir, args.skip_existing),
+                )
+                futures[fut] = global_idx
                 global_idx += 1
-                continue
+                total_submitted += 1
 
-            img_val = table.column("image")[row_idx].as_py()
-            lbl_val = table.column("label")[row_idx].as_py()
-
-            img = _to_pil(img_val).convert("RGB")
-            img.save(image_out)
-
-            lbl = _to_pil(lbl_val)
-            lbl_np = np.array(lbl)
-            if lbl_np.ndim == 3:
-                lbl_np = lbl_np[:, :, 0]
-            lbl_remapped = remap_label(lbl_np)
-            Image.fromarray(lbl_remapped, mode="L").save(label_out)
-
-            filenames.append(fname)
-            global_idx += 1
-
-            if global_idx % 500 == 0:
+        done = 0
+        for fut in as_completed(futures):
+            idx, fname = fut.result()
+            filenames[idx] = fname
+            done += 1
+            if done % 500 == 0 or done == total_submitted:
                 elapsed = time.time() - start
-                rate = global_idx / max(elapsed, 1e-6)
-                print(f"  {global_idx} images ({rate:.1f} img/s)")
+                rate = done / max(elapsed, 1e-6)
+                print(f"  {done}/{total_submitted} images ({rate:.1f} img/s)",
+                      flush=True)
+
+    sorted_names = [filenames[i] for i in sorted(filenames.keys())]
 
     split_file = osp.join(splits_dir, "train.txt")
     with open(split_file, "w") as f:
-        f.write("\n".join(filenames))
+        f.write("\n".join(sorted_names))
 
-    print(f"\nDone. {global_idx} images saved to {out_root}")
+    elapsed = time.time() - start
+    print(f"\nDone. {len(sorted_names)} images saved to {out_root} "
+          f"in {elapsed:.1f}s ({len(sorted_names)/max(elapsed,1e-6):.1f} img/s)")
     print(f"Split file: {split_file}")
 
 
@@ -143,6 +174,12 @@ if __name__ == "__main__":
         "--skip-existing",
         action="store_true",
         help="Skip images that already exist on disk",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=8,
+        help="Parallel workers for image processing (default: 8)",
     )
 
     main(parser.parse_args())

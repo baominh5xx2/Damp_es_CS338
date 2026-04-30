@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import os.path as osp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 from PIL import Image
@@ -39,18 +40,47 @@ def extract_labels(mask_path):
     return sorted(set(labels))
 
 
+def _extract_one(args_tuple):
+    """Worker: extract labels for a single file."""
+    filename, label_dir = args_tuple
+    mask_path = osp.join(label_dir, filename)
+    labels = extract_labels(mask_path)
+    return filename, labels
+
+
 def main(args):
     filenames = read_split(args.split_file)
+    num_workers = args.num_workers
 
     multilabel = {}
     missing = []
-    for entry in filenames:
-        filename = osp.basename(entry)
-        mask_path = osp.join(args.label_dir, filename)
-        labels = extract_labels(mask_path)
-        multilabel[filename] = labels
-        if not labels:
-            missing.append(filename)
+
+    work_items = [
+        (osp.basename(entry), args.label_dir) for entry in filenames
+    ]
+
+    if num_workers <= 1 or len(work_items) <= 10:
+        for filename, label_dir in work_items:
+            _, labels = _extract_one((filename, label_dir))
+            multilabel[filename] = labels
+            if not labels:
+                missing.append(filename)
+    else:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(_extract_one, item): item[0]
+                for item in work_items
+            }
+            done = 0
+            for fut in as_completed(futures):
+                filename, labels = fut.result()
+                multilabel[filename] = labels
+                if not labels:
+                    missing.append(filename)
+                done += 1
+                if done % 1000 == 0:
+                    print(f"  {done}/{len(work_items)} labels extracted",
+                          flush=True)
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -67,6 +97,8 @@ def main(args):
     print(f"Saved: {class_names_path}")
     print(f"Total files: {len(filenames)}")
     print(f"Empty-label files: {len(missing)}")
+    if num_workers > 1:
+        print(f"Workers used: {num_workers}")
 
 
 if __name__ == "__main__":
@@ -86,6 +118,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-file", type=str, default="multilabel.json",
         help="Output multilabel json filename",
+    )
+    parser.add_argument(
+        "--num-workers", type=int, default=8,
+        help="Parallel workers for label extraction (default: 8)",
     )
 
     main(parser.parse_args())
