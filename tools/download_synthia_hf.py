@@ -43,7 +43,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--repo-id",
         type=str,
-        default="Minhbao5xx2/synthia-rand-cityscapes-16class-parquet",
+        default="Minhbao5xx2/synthia-rand-cityscapes-16class-parquet_fix",
         help="HuggingFace dataset repo id",
     )
     parser.add_argument(
