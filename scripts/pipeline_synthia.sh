@@ -92,6 +92,13 @@ python generate_cams.py \
     --max_long_side 1024 \
     --skip_existing
 
+CAM_COUNT=$(ls "${CAM_DIR}"/*.npy 2>/dev/null | wc -l)
+echo "  => ${CAM_COUNT} .npy CAM files generated in ${CAM_DIR}"
+if [ "${CAM_COUNT}" -eq 0 ]; then
+    echo "ERROR: No CAM files generated. Check generate_cams.py output above."
+    exit 1
+fi
+
 # ---- Step 3: Evaluate CAMs ----
 echo ""
 echo "[Step 3/4] Evaluating CAMs (threshold grid search) ..."

@@ -120,7 +120,9 @@ def main():
             args=(dataset_list, args, label_splits),
         )
 
-    print("Done.")
+    import glob
+    npy_files = glob.glob(os.path.join(args.cam_out_dir, "*.npy"))
+    print(f"Done. {len(npy_files)} .npy files in {args.cam_out_dir}")
 
 
 if __name__ == "__main__":

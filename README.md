@@ -131,6 +131,12 @@ Output: `output/damp_synthia/prompt_learner.pth`
     --skip_existing
 ```
 
+Verify CAM output before proceeding:
+```bash
+!ls /content/output/cams_synthia/*.npy | wc -l
+# Should show 9400 (one .npy per image)
+```
+
 ### 7. Evaluate CAMs
 
 ```bash
@@ -224,6 +230,16 @@ python -m pytest tests/test_synthia_labels.py -v
 # Integration tests (needs torch + dassl, CPU OK)
 python -m pytest tests/test_synthia_mock_pipeline.py -v -s
 ```
+
+## Troubleshooting
+
+**`RuntimeError: No valid prediction/GT pairs found`**
+
+This means `eval_cam.py` can't find matching `.npy` CAM files and/or GT label files. The error message now includes diagnostic info showing exactly what's missing. Common causes:
+
+1. **CAM generation didn't complete** — check the generate_cams.py output for errors
+2. **Path mismatch** — ensure `--cam_out_dir` is the same path in both generate and eval commands
+3. **Verify CAM files exist**: `ls /content/output/cams_synthia/*.npy | wc -l` should show 9400
 
 ## Other Datasets
 

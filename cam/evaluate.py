@@ -231,7 +231,17 @@ def run_eval_with_crf(eval_list, cam_dir, gt_root, image_root, cam_type,
             gts.append(r[1])
 
     if len(preds) == 0:
-        raise RuntimeError("No valid prediction/GT pairs found.")
+        import glob
+        npy_count = len(glob.glob(osp.join(cam_dir, "*.npy")))
+        none_count = sum(1 for r in results if r is None)
+        sample = eval_list[:3] if len(eval_list) >= 3 else eval_list
+        raise RuntimeError(
+            f"No valid prediction/GT pairs found (CRF path).\n"
+            f"  cam_dir: {cam_dir} ({npy_count} .npy files found)\n"
+            f"  gt_root: {gt_root}\n"
+            f"  total entries: {len(eval_list)}, skipped: {none_count}\n"
+            f"  sample entries: {sample}"
+        )
 
     result = compute_scores(gts, preds, n_class=n_class)
     return result
@@ -245,7 +255,8 @@ def run_eval_cam(eval_list, cam_dir, gt_root, cam_type, cam_eval_thres,
                  n_class, dataset, use_bg_channel=True):
     preds = []
     labels = []
-    missing = 0
+    missing_gt = 0
+    missing_cam = 0
 
     for entry in eval_list:
         stem = entry_stem(entry)
@@ -254,17 +265,23 @@ def run_eval_cam(eval_list, cam_dir, gt_root, cam_type, cam_eval_thres,
         gt_file = resolve_label_path(gt_root, entry)
 
         if not osp.isfile(gt_file):
-            missing += 1
+            if missing_gt < 3:
+                print(f"[DEBUG] GT not found: {gt_file}")
+            missing_gt += 1
             continue
 
         if cam_type == "png":
             if not osp.isfile(cam_png):
-                missing += 1
+                if missing_cam < 3:
+                    print(f"[DEBUG] CAM png not found: {cam_png}")
+                missing_cam += 1
                 continue
             cls_labels = np.asarray(Image.open(cam_png), dtype=np.uint8)
         else:
             if not osp.isfile(cam_npy):
-                missing += 1
+                if missing_cam < 3:
+                    print(f"[DEBUG] CAM npy not found: {cam_npy}")
+                missing_cam += 1
                 continue
             cls_labels = load_pred_from_npy(
                 cam_npy, cam_type, cam_eval_thres,
@@ -285,10 +302,22 @@ def run_eval_cam(eval_list, cam_dir, gt_root, cam_type, cam_eval_thres,
         labels.append(gt)
 
     if len(preds) == 0:
-        raise RuntimeError("No valid prediction/GT pairs found.")
+        import glob
+        npy_count = len(glob.glob(osp.join(cam_dir, "*.npy")))
+        sample_entries = eval_list[:3] if len(eval_list) >= 3 else eval_list
+        raise RuntimeError(
+            f"No valid prediction/GT pairs found.\n"
+            f"  cam_dir: {cam_dir} ({npy_count} .npy files found)\n"
+            f"  gt_root: {gt_root}\n"
+            f"  missing_gt: {missing_gt}, missing_cam: {missing_cam}\n"
+            f"  sample entries: {sample_entries}\n"
+            f"  sample stems: {[entry_stem(e) for e in sample_entries]}"
+        )
 
-    if missing > 0:
-        print(f"[WARN] skipped {missing} items due to missing files")
+    total_missing = missing_gt + missing_cam
+    if total_missing > 0:
+        print(f"[WARN] skipped {total_missing} items "
+              f"(missing_gt={missing_gt}, missing_cam={missing_cam})")
 
     result = compute_scores(labels, preds, n_class=n_class)
     return result
