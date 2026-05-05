@@ -723,11 +723,11 @@ class DAMP(TrainerXU):
         len_x = len(self.train_loader_x)
         len_u = len(self.train_loader_u)
         if self.cfg.TRAIN.COUNT_ITER == "train_x":
-            self.num_batches = len_x
+            self.num_batches = min(len_x, 300)
         elif self.cfg.TRAIN.COUNT_ITER == "train_u":
-            self.num_batches = len_u
+            self.num_batches = min(len_u, 300)
         elif self.cfg.TRAIN.COUNT_ITER == "smaller_one":
-            self.num_batches = min(len_x, len_u)
+            self.num_batches = min(len_x, len_u, 300)
         else:
             raise ValueError(f"Unknown COUNT_ITER: {self.cfg.TRAIN.COUNT_ITER}")
 

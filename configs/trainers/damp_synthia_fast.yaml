@@ -36,7 +36,7 @@ MODEL:
 OPTIM:
   NAME: sgd
   LR: 0.008
-  MAX_EPOCH: 30
+  MAX_EPOCH: 20
   LR_SCHEDULER: cosine
   WARMUP_EPOCH: 1
   WARMUP_TYPE: linear
@@ -45,7 +45,7 @@ OPTIM:
 OPTIM_C:
   NAME: sgd
   LR: 0.008
-  MAX_EPOCH: 30
+  MAX_EPOCH: 20
   LR_SCHEDULER: cosine
   WARMUP_EPOCH: 1
   WARMUP_TYPE: linear
