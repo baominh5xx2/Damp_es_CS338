@@ -537,6 +537,15 @@ class DAMP(TrainerXU):
 
         self.model.to(self.device)
 
+        if hasattr(torch, "compile"):
+            print("Compiling model with torch.compile() ...")
+            self.model.prompt_learner = torch.compile(
+                self.model.prompt_learner, mode="reduce-overhead"
+            )
+            self.model.context_decoder = torch.compile(
+                self.model.context_decoder, mode="reduce-overhead"
+            )
+
         self.optim_p = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
         self.sched_p = build_lr_scheduler(self.optim_p, cfg.OPTIM)
         self.optim_c = build_optimizer(self.model.context_decoder, cfg.OPTIM_C)
@@ -714,7 +723,7 @@ class DAMP(TrainerXU):
         len_x = len(self.train_loader_x)
         len_u = len(self.train_loader_u)
         if self.cfg.TRAIN.COUNT_ITER == "train_x":
-            self.num_batches = len_x if self.cfg.DATASET.NAME == "OfficeHome" else 500
+            self.num_batches = len_x
         elif self.cfg.TRAIN.COUNT_ITER == "train_u":
             self.num_batches = len_u
         elif self.cfg.TRAIN.COUNT_ITER == "smaller_one":

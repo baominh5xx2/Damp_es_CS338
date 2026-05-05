@@ -68,7 +68,7 @@ python tools/build_cityscapes_multilabel.py \
 echo ""
 echo "[Step 1/4] Training DAMP prompt learner ..."
 python train.py \
-    --config-file configs/trainers/damp_synthia.yaml \
+    --config-file configs/trainers/damp_synthia_fast.yaml \
     DATASET.ROOT "${DATA_ROOT}" \
     OUTPUT_DIR "${DAMP_DIR}"
 
