@@ -147,6 +147,9 @@ def _to_pil(value):
         return value
     if isinstance(value, np.ndarray):
         return Image.fromarray(value)
+    if isinstance(value, bytes):
+        from io import BytesIO
+        return Image.open(BytesIO(value))
     if isinstance(value, dict):
         if value.get("path") and osp.isfile(value["path"]):
             return Image.open(value["path"])
