@@ -480,6 +480,9 @@ def _efficient_cam_per_image(model, aag, fg_text_features, bg_text_features,
         weights = np.mean(grad_np, axis=(2, 3))
         cam = np.sum(weights[:, :, None, None] * act_np, axis=1)
         cam = np.maximum(cam[0], 0).astype(np.float32)
+        # Normalize to [0,1] — same as scale_cam_image in BaseCAM.
+        # Required before refine_cam_with_attention which uses box_threshold.
+        cam = scale_cam_image([cam])[0]
 
         if no_refine:
             cam_highres = cv2.resize(cam, (ori_w, ori_h))
