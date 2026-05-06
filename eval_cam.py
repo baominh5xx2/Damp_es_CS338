@@ -123,6 +123,20 @@ def main():
     eval_list = load_split(args)
     if args.max_images > 0:
         eval_list = eval_list[:args.max_images]
+
+    # Auto-filter: only keep entries that have CAM files
+    ext = ".png" if args.cam_type == "png" else ".npy"
+    original_count = len(eval_list)
+    eval_list = [e for e in eval_list
+                 if os.path.isfile(os.path.join(args.cam_out_dir,
+                                                entry_stem(e) + ext))]
+    if len(eval_list) < original_count:
+        print(f"Filtered: {original_count} entries → {len(eval_list)} with CAM files")
+
+    if not eval_list:
+        print("No CAM files found. Nothing to evaluate.")
+        return
+
     print(f"Dataset: {args.dataset} ({n_class} classes, {len(eval_list)} images)")
 
     # ----- CRF evaluation -----
@@ -189,12 +203,14 @@ def main():
             use_bg_channel=use_bg,
         )
         miou = result["Mean IoU"]
-        print(f"  threshold={thres:.4f}  mIoU={miou:.4f}")
 
         if miou > best_miou:
             best_miou = miou
             best_thres = thres
             best_result = result
+
+    print(f"Searched {len(thresholds)} thresholds "
+          f"[{thresholds[0]:.2f}–{thresholds[-1]:.2f}]")
 
     print(f"\nBest threshold: {best_thres:.4f}")
     print_results(best_result, n_class, names)
