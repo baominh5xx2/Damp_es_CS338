@@ -405,7 +405,8 @@ def refine_cam_with_attention(grayscale_cam, attn_weight, box_threshold, h, w,
     box, cnt = scoremap2bbox(
         scoremap=grayscale_cam, threshold=box_threshold, multi_contour_eval=True,
     )
-    aff_mask = torch.zeros((grayscale_cam.shape[0], grayscale_cam.shape[1]))
+    aff_mask = torch.zeros((grayscale_cam.shape[0], grayscale_cam.shape[1]),
+                           device=attn_weight.device)
     for i_ in range(cnt):
         x0_, y0_, x1_, y1_ = box[i_]
         aff_mask[y0_:y1_, x0_:x1_] = 1
@@ -426,7 +427,7 @@ def refine_cam_with_attention(grayscale_cam, attn_weight, box_threshold, h, w,
 
     trans_mat = trans_mat * aff_mask
 
-    cam_to_refine = torch.FloatTensor(grayscale_cam)
+    cam_to_refine = torch.tensor(grayscale_cam, device=attn_weight.device)
     cam_to_refine = cam_to_refine.view(-1, 1)
 
     cam_refined = torch.matmul(trans_mat, cam_to_refine).reshape(h // 16, w // 16)
@@ -436,77 +437,88 @@ def refine_cam_with_attention(grayscale_cam, attn_weight, box_threshold, h, w,
 
 
 # ---------------------------------------------------------------------------
-# Efficient per-class GradCAM — one forward, per-class backward
+# Batched GradCAM — one forward for entire batch, per-class backward
 # ---------------------------------------------------------------------------
 
-def _efficient_cam_per_image(model, aag, fg_text_features, bg_text_features,
-                              image_features, attn_weights_from_encode,
-                              ori_h, ori_w, label_list, label_id_list,
-                              h, w, args, ds_cfg, device):
-    """Compute per-class GradCAM with ONE forward through last ViT block,
-    then per-class backward passes. Saves (N_classes - 1) forward passes."""
+def _batched_efficient_cam(model, aag, fg_text_features, bg_text_features,
+                            batch_features, batch_attn, items, h, w,
+                            args, ds_cfg, device):
+    """Process entire batch through last ViT block at once.
+    ONE forward + N_fg_classes backward passes (instead of B*N_per_image).
+    Keeps attention refinement on GPU."""
     box_threshold = float(getattr(args, "box_threshold", ds_cfg["box_threshold"]))
     no_refine = bool(getattr(args, "no_refine", False))
+    B = len(items)
 
-    fg_feats = fg_text_features[label_id_list].to(device)
-    bg_feats = bg_text_features.to(device)
-    text_feats = torch.cat([fg_feats, bg_feats], dim=0)
+    # Full text features (all fg + bg) — shared across images
+    text_feats = torch.cat([fg_text_features, bg_text_features], dim=0).to(device)
+    n_fg = fg_text_features.shape[0]
 
-    input_tensor = [image_features, text_feats]
-
-    # ONE forward through last block — captures activations via hooks
-    # NOTE: aag() expects raw H,W and divides by 16 internally for reshape
+    # ONE forward through last block for entire batch
+    input_tensor = [batch_features, text_feats]
     outputs = aag(input_tensor, h, w)
-    logits = outputs[0]
+    logits = outputs[0]   # (B, C)
     attn_weight_last = outputs[1]
 
-    # Activations captured by forward hook (reshaped to NCHW)
+    # Activations: (B, D, H', W') on CPU for numpy GradCAM
     act_np = aag.activations[0].cpu().data.numpy()
 
-    refined_cam_to_save = []
-    attn_weight_for_refine = None
+    # Per-image CAM storage: {image_idx: {class_id: cam_array}}
+    image_cams = [dict() for _ in range(B)]
 
-    for idx in range(len(label_list)):
-        # Reset gradients, keep activations
+    # Per-class backward across entire batch
+    for c_idx in range(n_fg):
         aag.gradients = []
         model.zero_grad()
+        logits[:, c_idx].sum().backward(retain_graph=True)
 
-        # Per-class backward
-        logits[0, idx].backward(retain_graph=True)
+        grad_np = aag.gradients[0].cpu().data.numpy()  # (B, D, H', W')
 
-        grad_np = aag.gradients[0].cpu().data.numpy()
+        for i in range(B):
+            if c_idx not in items[i]["label_id_list"]:
+                continue
 
-        # GradCAM: weights = GAP(grad), cam = sum(weights * act)
-        weights = np.mean(grad_np, axis=(2, 3))
-        cam = np.sum(weights[:, :, None, None] * act_np, axis=1)
-        cam = np.maximum(cam[0], 0).astype(np.float32)
-        # Normalize to [0,1] — same as scale_cam_image in BaseCAM.
-        # Required before refine_cam_with_attention which uses box_threshold.
-        cam = scale_cam_image([cam])[0]
-
-        if no_refine:
-            cam_highres = cv2.resize(cam, (ori_w, ori_h))
-            refined_cam_to_save.append(torch.tensor(cam_highres))
-            continue
-
-        # Compute attention for refinement (once)
-        if attn_weight_for_refine is None:
-            aw_list = list(attn_weights_from_encode)
-            aw_list.append(attn_weight_last)
-            aw = [a[:, 1:, 1:] for a in aw_list]
-            aw = torch.stack(aw, dim=0)[-8:]
-            aw = torch.mean(aw, dim=0)
-            attn_weight_for_refine = aw[0].cpu().detach().float()
-
-        cam_refined = refine_cam_with_attention(
-            cam, attn_weight_for_refine, box_threshold,
-            h, w, ori_w, ori_h,
-        )
-        refined_cam_to_save.append(torch.tensor(cam_refined))
+            weights = np.mean(grad_np[i], axis=(1, 2))  # (D,)
+            cam = np.sum(weights[:, None, None] * act_np[i], axis=0)  # (H', W')
+            cam = np.maximum(cam, 0).astype(np.float32)
+            cam = scale_cam_image([cam])[0]
+            image_cams[i][c_idx] = cam
 
     del logits
-    keys = torch.tensor(label_id_list)
-    return keys, torch.stack(refined_cam_to_save, dim=0)
+
+    # Per-image attention refinement (on GPU)
+    results = [None] * B
+    for i in range(B):
+        if not image_cams[i]:
+            continue
+
+        keys = sorted(image_cams[i].keys())
+
+        if not no_refine:
+            # Per-image attention weights — keep on GPU
+            aw_i = [aw[i] for aw in batch_attn]
+            aw_i.append(attn_weight_last[i])
+            aw_i = [a[:, 1:, 1:] for a in aw_i]
+            aw_i = torch.stack(aw_i, dim=0)[-8:]
+            aw_i = torch.mean(aw_i, dim=0)
+            attn_i = aw_i.to(device).float()
+
+        refined_cams = []
+        for c_idx in keys:
+            cam = image_cams[i][c_idx]
+            if no_refine:
+                cam_highres = cv2.resize(cam, (items[i]["ori_w"], items[i]["ori_h"]))
+                refined_cams.append(torch.tensor(cam_highres))
+            else:
+                cam_refined = refine_cam_with_attention(
+                    cam, attn_i, box_threshold,
+                    h, w, items[i]["ori_w"], items[i]["ori_h"],
+                )
+                refined_cams.append(torch.tensor(cam_refined))
+
+        results[i] = (torch.tensor(keys), torch.stack(refined_cams, dim=0))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -729,7 +741,7 @@ def perform(process_id, dataset_list, args, all_label_list=None):
         use_batch = len(hw_set) == 1 and len(batch) > 1
 
         if use_batch:
-            # Batched encode_image (biggest speedup)
+            # Batched encode_image
             h, w = batch[0]["h"], batch[0]["w"]
             batch_tensor = torch.stack([it["image_tensor"] for it in batch])
             batch_tensor = batch_tensor.to(device_id).type(model.dtype)
@@ -737,28 +749,41 @@ def perform(process_id, dataset_list, args, all_label_list=None):
             with torch.no_grad():
                 batch_features, batch_attn = model.encode_image(batch_tensor, h, w)
 
-            for i, item in enumerate(batch):
-                try:
-                    feat_i = batch_features[:, i:i+1, :]
-                    attn_i = [aw[i:i+1] for aw in batch_attn]
-
-                    keys, refined_cams = _efficient_cam_per_image(
-                        model, aag, fg_text_features, bg_text_features,
-                        feat_i, attn_i,
-                        item["ori_h"], item["ori_w"],
-                        item["label_list"], item["label_id_list"],
-                        h, w, args, ds_cfg, device_id,
-                    )
-
-                    out_path = osp.join(args.cam_out_dir, item["stem"] + ".npy")
-                    np.save(out_path, {
-                        "keys": keys.numpy(),
-                        "attn_highres": refined_cams.cpu().numpy().astype(np.float16),
-                    })
-                    saved += 1
-                except Exception as e:
-                    print(f"[worker {process_id}] Error: {item['entry']}: {e}")
-                    errors += 1
+            # Batched GradCAM: all images through last block at once
+            try:
+                results = _batched_efficient_cam(
+                    model, aag, fg_text_features, bg_text_features,
+                    batch_features, batch_attn, batch, h, w,
+                    args, ds_cfg, device_id,
+                )
+                for i, result in enumerate(results):
+                    if result is not None:
+                        keys, refined_cams = result
+                        out_path = osp.join(args.cam_out_dir, batch[i]["stem"] + ".npy")
+                        np.save(out_path, {
+                            "keys": keys.numpy(),
+                            "attn_highres": refined_cams.cpu().numpy().astype(np.float16),
+                        })
+                        saved += 1
+            except Exception as e:
+                print(f"[worker {process_id}] Batch error, falling back: {e}")
+                for item in batch:
+                    try:
+                        keys, refined_cams = generate_cam_for_image(
+                            model, cam, fg_text_features, bg_text_features,
+                            item["img_path"], item["ori_h"], item["ori_w"],
+                            item["label_list"], item["label_id_list"],
+                            args, device_id, ds_cfg,
+                        )
+                        out_path = osp.join(args.cam_out_dir, item["stem"] + ".npy")
+                        np.save(out_path, {
+                            "keys": keys.numpy(),
+                            "attn_highres": refined_cams.cpu().numpy().astype(np.float16),
+                        })
+                        saved += 1
+                    except Exception as e2:
+                        print(f"[worker {process_id}] Error: {item['entry']}: {e2}")
+                        errors += 1
 
             del batch_tensor, batch_features, batch_attn
         else:

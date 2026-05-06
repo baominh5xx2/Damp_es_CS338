@@ -37,8 +37,8 @@ def main():
     parser.add_argument("--model", type=str, default="ViT-B/16")
     parser.add_argument("--num_workers", type=int, default=-1,
                         help="Number of workers (-1 = auto-detect from GPU count)")
-    parser.add_argument("--encode_batch_size", type=int, default=4,
-                        help="Batch size for batched ViT encode_image (default: 4)")
+    parser.add_argument("--encode_batch_size", type=int, default=8,
+                        help="Batch size for batched ViT encode_image (default: 8)")
     parser.add_argument("--box_threshold", type=float, default=-1,
                         help="Override per-dataset default (-1 = use dataset default)")
     parser.add_argument("--image_scale", type=float, default=1.0)
