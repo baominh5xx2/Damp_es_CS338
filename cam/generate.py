@@ -453,10 +453,10 @@ def _efficient_cam_per_image(model, aag, fg_text_features, bg_text_features,
     text_feats = torch.cat([fg_feats, bg_feats], dim=0)
 
     input_tensor = [image_features, text_feats]
-    hw, ww = h // 16, w // 16
 
     # ONE forward through last block — captures activations via hooks
-    outputs = aag(input_tensor, hw, ww)
+    # NOTE: aag() expects raw H,W and divides by 16 internally for reshape
+    outputs = aag(input_tensor, h, w)
     logits = outputs[0]
     attn_weight_last = outputs[1]
 
