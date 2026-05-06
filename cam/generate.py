@@ -346,10 +346,12 @@ def build_worker_components(args, device):
     model, _ = clip.load(args.model, device=device)
 
     # torch.compile for faster ViT inference
+    # NOTE: Must use mode="default" — "reduce-overhead" (CUDA graphs) crashes
+    # because upsample_pos_emb creates new Parameters each forward pass.
     if hasattr(torch, "compile") and device != "cpu":
         try:
-            model.visual = torch.compile(model.visual, mode="reduce-overhead")
-            print("[build_worker_components] torch.compile enabled on visual encoder")
+            model.visual = torch.compile(model.visual, mode="default")
+            print("[build_worker_components] torch.compile enabled (mode=default)")
         except Exception as e:
             print(f"[build_worker_components] torch.compile skipped: {e}")
 
