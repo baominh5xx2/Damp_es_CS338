@@ -139,10 +139,7 @@ def img_ms_and_flip(img_path, ori_height, ori_width, scales=None,
         )
         preprocess = _transform_resize(resized_h, resized_w)
         image = preprocess(Image.open(img_path))
-        image_ori = image
-        image_flip = torch.flip(image, [-1])
-        all_imgs.append(image_ori)
-        all_imgs.append(image_flip)
+        all_imgs.append(image)
     return all_imgs
 
 
@@ -321,12 +318,40 @@ def _resolve_path(root, entry):
 
 
 # ---------------------------------------------------------------------------
+# Label precomputation — scan masks once instead of per-image I/O
+# ---------------------------------------------------------------------------
+
+def _precompute_labels(entries, args):
+    """Scan all label masks once and return {entry: label_id_list}."""
+    cache = {}
+    use_tqdm = len(entries) > 100
+    for entry in tqdm(entries, desc="Scanning labels", disable=not use_tqdm):
+        if args.dataset == "synthia":
+            lp = _resolve_path(args.label_root, entry)
+            cache[entry] = _extract_synthia_labels_from_mask(lp)
+        elif args.dataset in ("gta5", "cityscapes"):
+            lp = _resolve_path(args.label_root, entry)
+            cache[entry] = _extract_image_labels_from_mask(lp)
+        else:
+            cache[entry] = None
+    return cache
+
+
+# ---------------------------------------------------------------------------
 # Worker components
 # ---------------------------------------------------------------------------
 
 def build_worker_components(args, device):
     ds_cfg = DATASET_CONFIGS[args.dataset]
     model, _ = clip.load(args.model, device=device)
+
+    # torch.compile for faster ViT inference
+    if hasattr(torch, "compile") and device != "cpu":
+        try:
+            model.visual = torch.compile(model.visual, mode="reduce-overhead")
+            print("[build_worker_components] torch.compile enabled on visual encoder")
+        except Exception as e:
+            print(f"[build_worker_components] torch.compile skipped: {e}")
 
     bg_text_features = zeroshot_classifier(
         ds_cfg["bg_categories"], ["a clean origami {}."], model, device
@@ -409,7 +434,78 @@ def refine_cam_with_attention(grayscale_cam, attn_weight, box_threshold, h, w,
 
 
 # ---------------------------------------------------------------------------
-# Core per-image CAM generation
+# Efficient per-class GradCAM — one forward, per-class backward
+# ---------------------------------------------------------------------------
+
+def _efficient_cam_per_image(model, aag, fg_text_features, bg_text_features,
+                              image_features, attn_weights_from_encode,
+                              ori_h, ori_w, label_list, label_id_list,
+                              h, w, args, ds_cfg, device):
+    """Compute per-class GradCAM with ONE forward through last ViT block,
+    then per-class backward passes. Saves (N_classes - 1) forward passes."""
+    box_threshold = float(getattr(args, "box_threshold", ds_cfg["box_threshold"]))
+    no_refine = bool(getattr(args, "no_refine", False))
+
+    fg_feats = fg_text_features[label_id_list].to(device)
+    bg_feats = bg_text_features.to(device)
+    text_feats = torch.cat([fg_feats, bg_feats], dim=0)
+
+    input_tensor = [image_features, text_feats]
+    hw, ww = h // 16, w // 16
+
+    # ONE forward through last block — captures activations via hooks
+    outputs = aag(input_tensor, hw, ww)
+    logits = outputs[0]
+    attn_weight_last = outputs[1]
+
+    # Activations captured by forward hook (reshaped to NCHW)
+    act_np = aag.activations[0].cpu().data.numpy()
+
+    refined_cam_to_save = []
+    attn_weight_for_refine = None
+
+    for idx in range(len(label_list)):
+        # Reset gradients, keep activations
+        aag.gradients = []
+        model.zero_grad()
+
+        # Per-class backward
+        logits[0, idx].backward(retain_graph=True)
+
+        grad_np = aag.gradients[0].cpu().data.numpy()
+
+        # GradCAM: weights = GAP(grad), cam = sum(weights * act)
+        weights = np.mean(grad_np, axis=(2, 3))
+        cam = np.sum(weights[:, :, None, None] * act_np, axis=1)
+        cam = np.maximum(cam[0], 0).astype(np.float32)
+
+        if no_refine:
+            cam_highres = cv2.resize(cam, (ori_w, ori_h))
+            refined_cam_to_save.append(torch.tensor(cam_highres))
+            continue
+
+        # Compute attention for refinement (once)
+        if attn_weight_for_refine is None:
+            aw_list = list(attn_weights_from_encode)
+            aw_list.append(attn_weight_last)
+            aw = [a[:, 1:, 1:] for a in aw_list]
+            aw = torch.stack(aw, dim=0)[-8:]
+            aw = torch.mean(aw, dim=0)
+            attn_weight_for_refine = aw[0].cpu().detach().float()
+
+        cam_refined = refine_cam_with_attention(
+            cam, attn_weight_for_refine, box_threshold,
+            h, w, ori_w, ori_h,
+        )
+        refined_cam_to_save.append(torch.tensor(cam_refined))
+
+    del logits
+    keys = torch.tensor(label_id_list)
+    return keys, torch.stack(refined_cam_to_save, dim=0)
+
+
+# ---------------------------------------------------------------------------
+# Core per-image CAM generation (original, kept as fallback)
 # ---------------------------------------------------------------------------
 
 def generate_cam_for_image(model, cam_method, fg_text_features, bg_text_features,
@@ -424,7 +520,6 @@ def generate_cam_for_image(model, cam_method, fg_text_features, bg_text_features
         img_path, ori_height, ori_width,
         scales=[image_scale], max_long_side=max_long_side,
     )
-    ms_imgs = [ms_imgs[0]]
 
     refined_cam_all_scales = []
 
@@ -516,26 +611,37 @@ def perform(process_id, dataset_list, args, all_label_list=None):
             label_bin = label_bin[:max_images]
 
     skip_existing = bool(getattr(args, "skip_existing", False))
+    encode_batch_size = int(getattr(args, "encode_batch_size", 4))
 
     ds_cfg = DATASET_CONFIGS[args.dataset]
     model, bg_text_features, fg_text_features, cam = build_worker_components(args, device_id)
     bg_text_features = bg_text_features.to(device_id)
     fg_text_features = fg_text_features.to(device_id)
 
-    saved = 0
+    # Precompute labels for mask-based datasets
+    label_cache = None
+    if args.dataset in ("synthia", "gta5", "cityscapes"):
+        print(f"[worker {process_id}] Precomputing labels for {len(databin)} images...")
+        label_cache = _precompute_labels(databin, args)
+
+    # Build work items — parse metadata, filter invalid/skipped
+    work_items = []
     skipped = 0
     errors = 0
+    image_scale = float(getattr(args, "image_scale", 1.0))
+    max_long_side = int(getattr(args, "max_long_side", ds_cfg["max_long_side"]))
 
-    for im_idx, entry in enumerate(tqdm(databin)):
+    for im_idx, entry in enumerate(databin):
+        stem = osp.splitext(osp.basename(entry))[0]
+        out_name = stem + ".npy"
+        out_path = osp.join(args.cam_out_dir, out_name)
+        if skip_existing and osp.isfile(out_path):
+            skipped += 1
+            continue
+
         try:
-            stem = osp.splitext(osp.basename(entry))[0]
-            out_name = stem + ".npy"
-            out_path = osp.join(args.cam_out_dir, out_name)
-            if skip_existing and osp.isfile(out_path):
-                skipped += 1
-                continue
+            item = {"entry": entry, "stem": stem, "im_idx": im_idx}
 
-            # Parse labels based on dataset type
             if args.dataset == "voc12":
                 img_path, ori_h, ori_w, label_list, label_id_list = (
                     _parse_labels_voc12(entry, args, ds_cfg["fg_classnames"])
@@ -547,52 +653,129 @@ def perform(process_id, dataset_list, args, all_label_list=None):
                 )
             elif args.dataset in ("gta5", "cityscapes"):
                 img_path = _resolve_path(args.img_root, entry)
-                label_path = _resolve_path(args.label_root, entry)
                 if not osp.isfile(img_path):
                     errors += 1
                     continue
                 ori_image = Image.open(img_path)
                 ori_h, ori_w = np.asarray(ori_image).shape[:2]
-                label_id_list = _extract_image_labels_from_mask(label_path)
-                if len(label_id_list) == 0:
+                if label_cache:
+                    label_id_list = label_cache.get(entry, [])
+                else:
+                    label_id_list = _extract_image_labels_from_mask(
+                        _resolve_path(args.label_root, entry))
+                if not label_id_list:
                     errors += 1
                     continue
                 label_list = [CITYSCAPES_PROMPT_NAMES[lid] for lid in label_id_list]
             elif args.dataset == "synthia":
                 img_path = _resolve_path(args.img_root, entry)
-                label_path = _resolve_path(args.label_root, entry)
                 if not osp.isfile(img_path):
                     errors += 1
                     continue
                 ori_image = Image.open(img_path)
                 ori_h, ori_w = np.asarray(ori_image).shape[:2]
-                label_id_list = _extract_synthia_labels_from_mask(label_path)
-                if len(label_id_list) == 0:
+                if label_cache:
+                    label_id_list = label_cache.get(entry, [])
+                else:
+                    label_id_list = _extract_synthia_labels_from_mask(
+                        _resolve_path(args.label_root, entry))
+                if not label_id_list:
                     errors += 1
                     continue
                 label_list = [CITYSCAPES_PROMPT_NAMES[lid] for lid in label_id_list]
             else:
                 raise ValueError(f"Unknown dataset: {args.dataset}")
 
-            if len(label_list) == 0:
+            if not label_list:
                 errors += 1
                 continue
 
-            keys, refined_cams = generate_cam_for_image(
-                model, cam, fg_text_features, bg_text_features,
-                img_path, ori_h, ori_w, label_list, label_id_list,
-                args, device_id, ds_cfg,
-            )
+            h, w = _scaled_hw(ori_h, ori_w, scale=image_scale,
+                              max_long_side=max_long_side)
+            preprocess = _transform_resize(h, w)
+            image_tensor = preprocess(Image.open(img_path).convert("RGB"))
 
-            np.save(out_path, {
-                "keys": keys.numpy(),
-                "attn_highres": refined_cams.cpu().numpy().astype(np.float16),
+            item.update({
+                "img_path": img_path,
+                "ori_h": ori_h, "ori_w": ori_w,
+                "h": h, "w": w,
+                "label_list": label_list,
+                "label_id_list": label_id_list,
+                "image_tensor": image_tensor,
             })
-            saved += 1
+            work_items.append(item)
 
-        except Exception as e:
-            print(f"[worker {process_id}] Error processing {entry}: {e}")
+        except Exception:
             errors += 1
 
-    print(f"[worker {process_id}] saved={saved}, skipped={skipped}, errors={errors}")
+    print(f"[worker {process_id}] {len(work_items)} to process, "
+          f"{skipped} skipped, {errors} invalid")
+
+    # Process in batches — batched encode_image + efficient per-class GradCAM
+    saved = 0
+    aag = cam.activations_and_grads
+
+    for batch_start in tqdm(range(0, len(work_items), encode_batch_size),
+                            desc=f"Worker {process_id}"):
+        batch = work_items[batch_start:batch_start + encode_batch_size]
+
+        # Check if all images in batch share the same (h, w) for batching
+        hw_set = set((it["h"], it["w"]) for it in batch)
+        use_batch = len(hw_set) == 1 and len(batch) > 1
+
+        if use_batch:
+            # Batched encode_image (biggest speedup)
+            h, w = batch[0]["h"], batch[0]["w"]
+            batch_tensor = torch.stack([it["image_tensor"] for it in batch])
+            batch_tensor = batch_tensor.to(device_id).type(model.dtype)
+
+            with torch.no_grad():
+                batch_features, batch_attn = model.encode_image(batch_tensor, h, w)
+
+            for i, item in enumerate(batch):
+                try:
+                    feat_i = batch_features[:, i:i+1, :]
+                    attn_i = [aw[i:i+1] for aw in batch_attn]
+
+                    keys, refined_cams = _efficient_cam_per_image(
+                        model, aag, fg_text_features, bg_text_features,
+                        feat_i, attn_i,
+                        item["ori_h"], item["ori_w"],
+                        item["label_list"], item["label_id_list"],
+                        h, w, args, ds_cfg, device_id,
+                    )
+
+                    out_path = osp.join(args.cam_out_dir, item["stem"] + ".npy")
+                    np.save(out_path, {
+                        "keys": keys.numpy(),
+                        "attn_highres": refined_cams.cpu().numpy().astype(np.float16),
+                    })
+                    saved += 1
+                except Exception as e:
+                    print(f"[worker {process_id}] Error: {item['entry']}: {e}")
+                    errors += 1
+
+            del batch_tensor, batch_features, batch_attn
+        else:
+            # Fallback: individual processing
+            for item in batch:
+                try:
+                    keys, refined_cams = generate_cam_for_image(
+                        model, cam, fg_text_features, bg_text_features,
+                        item["img_path"], item["ori_h"], item["ori_w"],
+                        item["label_list"], item["label_id_list"],
+                        args, device_id, ds_cfg,
+                    )
+
+                    out_path = osp.join(args.cam_out_dir, item["stem"] + ".npy")
+                    np.save(out_path, {
+                        "keys": keys.numpy(),
+                        "attn_highres": refined_cams.cpu().numpy().astype(np.float16),
+                    })
+                    saved += 1
+                except Exception as e:
+                    print(f"[worker {process_id}] Error: {item['entry']}: {e}")
+                    errors += 1
+
+    print(f"[worker {process_id}] done: saved={saved}, skipped={skipped}, errors={errors}")
     return 0

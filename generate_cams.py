@@ -35,7 +35,10 @@ def main():
     parser.add_argument("--split_file", type=str, required=True)
     parser.add_argument("--cam_out_dir", type=str, required=True)
     parser.add_argument("--model", type=str, default="ViT-B/16")
-    parser.add_argument("--num_workers", type=int, default=1)
+    parser.add_argument("--num_workers", type=int, default=-1,
+                        help="Number of workers (-1 = auto-detect from GPU count)")
+    parser.add_argument("--encode_batch_size", type=int, default=4,
+                        help="Batch size for batched ViT encode_image (default: 4)")
     parser.add_argument("--box_threshold", type=float, default=-1,
                         help="Override per-dataset default (-1 = use dataset default)")
     parser.add_argument("--image_scale", type=float, default=1.0)
@@ -72,6 +75,13 @@ def main():
         args.max_long_side = ds_cfg["max_long_side"]
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    n_gpus = torch.cuda.device_count()
+
+    # Auto-detect num_workers
+    if args.num_workers < 0:
+        args.num_workers = max(1, n_gpus) if n_gpus > 0 else 1
+        print(f"Auto-detected {n_gpus} GPU(s), using {args.num_workers} worker(s)")
+
     print(f"Device: {device}")
     print(f"Dataset: {args.dataset}")
     print(f"Settings: image_scale={args.image_scale}, max_long_side={args.max_long_side}, "
