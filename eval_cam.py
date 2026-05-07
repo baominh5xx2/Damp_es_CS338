@@ -210,7 +210,6 @@ def main():
             entry_stem, resolve_label_path, load_pred_from_npy,
             map_mask_to_trainid, map_mask_to_synthia16, compute_scores,
         )
-        import os
 
         print(f"Loading {len(eval_list)} CAMs + GTs (one-time)...")
         voc_style = args.dataset in ("voc12", "coco14")
