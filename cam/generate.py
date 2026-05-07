@@ -577,8 +577,7 @@ def perform(process_id, dataset_list, args, all_label_list=None):
                 if not osp.isfile(img_path):
                     errors += 1
                     continue
-                ori_image = Image.open(img_path)
-                ori_h, ori_w = np.asarray(ori_image).shape[:2]
+                ori_w, ori_h = Image.open(img_path).size
                 if label_cache:
                     label_id_list = label_cache.get(entry, [])
                 else:
@@ -593,8 +592,7 @@ def perform(process_id, dataset_list, args, all_label_list=None):
                 if not osp.isfile(img_path):
                     errors += 1
                     continue
-                ori_image = Image.open(img_path)
-                ori_h, ori_w = np.asarray(ori_image).shape[:2]
+                ori_w, ori_h = Image.open(img_path).size
                 if label_cache:
                     label_id_list = label_cache.get(entry, [])
                 else:
