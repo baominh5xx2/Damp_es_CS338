@@ -190,27 +190,89 @@ def main():
     best_thres = thresholds[0]
     best_result = None
 
-    for thres in thresholds:
-        thres = round(thres, 4)
+    if len(thresholds) == 1:
+        # Single threshold — use normal path
         result = run_eval_cam(
             eval_list=eval_list,
             cam_dir=args.cam_out_dir,
             gt_root=args.gt_root,
             cam_type=args.cam_type,
-            cam_eval_thres=thres,
+            cam_eval_thres=thresholds[0],
             n_class=n_class,
             dataset=args.dataset,
             use_bg_channel=use_bg,
         )
-        miou = result["Mean IoU"]
+        best_result = result
+        best_thres = thresholds[0]
+    else:
+        # Grid search — load CAMs + GTs once, loop thresholds in memory
+        from cam.evaluate import (
+            entry_stem, resolve_label_path, load_pred_from_npy,
+            map_mask_to_trainid, map_mask_to_synthia16, compute_scores,
+        )
+        import os
 
-        if miou > best_miou:
-            best_miou = miou
-            best_thres = thres
-            best_result = result
+        print(f"Loading {len(eval_list)} CAMs + GTs (one-time)...")
+        voc_style = args.dataset in ("voc12", "coco14")
+        all_cams = []
+        all_keys = []
+        all_gts = []
 
-    print(f"Searched {len(thresholds)} thresholds "
-          f"[{thresholds[0]:.2f}–{thresholds[-1]:.2f}]")
+        for entry in eval_list:
+            stem = entry_stem(entry)
+            cam_npy = os.path.join(args.cam_out_dir, stem + ".npy")
+            gt_file = resolve_label_path(args.gt_root, entry)
+
+            if not os.path.isfile(cam_npy) or not os.path.isfile(gt_file):
+                continue
+
+            cam_dict = np.load(cam_npy, allow_pickle=True).item()
+            all_cams.append(cam_dict[args.cam_type])
+            all_keys.append(cam_dict["keys"].astype(np.int64))
+            gt = np.asarray(Image.open(gt_file), dtype=np.uint8)
+
+            if args.dataset in ("gta5", "cityscapes"):
+                gt = map_mask_to_trainid(gt)
+            elif args.dataset == "synthia":
+                gt = map_mask_to_synthia16(gt)
+            all_gts.append(gt)
+
+        print(f"Loaded {len(all_cams)} pairs. Searching {len(thresholds)} thresholds...")
+
+        for thres in thresholds:
+            thres = round(thres, 4)
+            preds = []
+            for i in range(len(all_cams)):
+                cams = all_cams[i]
+                keys = all_keys[i]
+
+                if use_bg:
+                    bg_score = np.full((1, cams.shape[1], cams.shape[2]),
+                                       thres, dtype=cams.dtype)
+                    cams_with_bg = np.concatenate((bg_score, cams), axis=0)
+                    pred_idx = np.argmax(cams_with_bg, axis=0)
+
+                    if voc_style:
+                        keys_with_bg = np.pad(keys + 1, (1, 0), mode='constant')
+                        pred = keys_with_bg[pred_idx].astype(np.uint8)
+                    else:
+                        pred = np.full(pred_idx.shape, 255, dtype=np.uint8)
+                        fg_mask = pred_idx > 0
+                        pred[fg_mask] = keys[pred_idx[fg_mask] - 1].astype(np.uint8)
+                else:
+                    pred_idx = np.argmax(cams, axis=0)
+                    pred = keys[pred_idx].astype(np.uint8)
+
+                preds.append(pred)
+
+            result = compute_scores(all_gts, preds, n_class=n_class)
+            miou = result["Mean IoU"]
+            print(f"  thres={thres:.2f}  mIoU={miou:.4f}")
+
+            if miou > best_miou:
+                best_miou = miou
+                best_thres = thres
+                best_result = result
 
     print(f"\nBest threshold: {best_thres:.4f}")
     print_results(best_result, n_class, names)
