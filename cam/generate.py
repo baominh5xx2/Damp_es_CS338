@@ -444,13 +444,12 @@ def _batched_efficient_cam(model, aag, fg_text_features, bg_text_features,
                             batch_features, batch_attn, items, h, w,
                             args, ds_cfg, device):
     """Process entire batch through last ViT block at once.
-    ONE forward + N_fg_classes backward passes (instead of B*N_per_image).
-    Keeps attention refinement on GPU."""
+    ONE forward + vectorized GradCAM weights + batched attention refinement."""
     box_threshold = float(getattr(args, "box_threshold", ds_cfg["box_threshold"]))
     no_refine = bool(getattr(args, "no_refine", False))
     B = len(items)
+    Hp, Wp = h // 16, w // 16
 
-    # Full text features (all fg + bg) — shared across images
     text_feats = torch.cat([fg_text_features, bg_text_features], dim=0).to(device)
     n_fg = fg_text_features.shape[0]
 
@@ -460,65 +459,139 @@ def _batched_efficient_cam(model, aag, fg_text_features, bg_text_features,
     logits = outputs[0]   # (B, C)
     attn_weight_last = outputs[1]
 
-    # Activations: (B, D, H', W') on CPU for numpy GradCAM
-    act_np = aag.activations[0].cpu().data.numpy()
+    # Activations on GPU: (B, D, H', W')
+    activations = aag.activations[0]  # keep on GPU
 
-    # Per-image CAM storage: {image_idx: {class_id: cam_array}}
-    image_cams = [dict() for _ in range(B)]
-
-    # Per-class backward across entire batch
-    for c_idx in range(n_fg):
-        aag.gradients = []
-        model.zero_grad()
-        logits[:, c_idx].sum().backward(retain_graph=True)
-
-        grad_np = aag.gradients[0].cpu().data.numpy()  # (B, D, H', W')
-
-        for i in range(B):
-            if c_idx not in items[i]["label_id_list"]:
-                continue
-
-            weights = np.mean(grad_np[i], axis=(1, 2))  # (D,)
-            cam = np.sum(weights[:, None, None] * act_np[i], axis=0)  # (H', W')
-            cam = np.maximum(cam, 0).astype(np.float32)
-            cam = scale_cam_image([cam])[0]
-            image_cams[i][c_idx] = cam
-
-    del logits
-
-    # Per-image attention refinement (on GPU)
-    results = [None] * B
+    # Build mask: which images need which classes
+    # (B, n_fg) bool — True if image i contains class c
+    label_masks = []
     for i in range(B):
-        if not image_cams[i]:
+        lids = set(items[i]["label_id_list"])
+        label_masks.append(torch.tensor([c in lids for c in range(n_fg)],
+                                         device=device))
+    label_mask = torch.stack(label_masks, dim=0)  # (B, n_fg)
+
+    # Vectorized GradCAM: one backward per class, compute CAMs on GPU
+    # cam_tensor: (B, n_fg, Hp, Wp) — only filled where label_mask is True
+    cam_tensor = torch.zeros(B, n_fg, Hp, Wp, device=device)
+
+    for c_idx in range(n_fg):
+        # Skip if no image in batch needs this class
+        if not label_mask[:, c_idx].any():
             continue
 
-        keys = sorted(image_cams[i].keys())
+        aag.gradients = []
+        model.zero_grad()
+        logits[:, c_idx].sum().backward(retain_graph=(c_idx < n_fg - 1))
 
-        if not no_refine:
-            # Per-image attention weights — keep on GPU
-            aw_i = [aw[i:i+1] for aw in batch_attn]
-            aw_i.append(attn_weight_last[i:i+1])
-            aw_i = [a[0, 1:, 1:] for a in aw_i]
-            aw_i = torch.stack(aw_i, dim=0)[-8:]
-            aw_i = torch.mean(aw_i, dim=0)
-            attn_i = aw_i.to(device).float()
+        gradients = aag.gradients[0]  # (B, D, H', W') on GPU
+
+        # Global average pool gradients → weights (B, D, 1, 1)
+        weights = gradients.mean(dim=(2, 3), keepdim=True)
+
+        # Weighted sum: (B, D, Hp, Wp) * (B, D, 1, 1) → sum over D → (B, Hp, Wp)
+        cam_raw = (weights * activations).sum(dim=1)  # (B, Hp, Wp)
+        cam_raw = torch.clamp(cam_raw, min=0)
+
+        # Normalize per-image to [0, 1]
+        for i in range(B):
+            if label_mask[i, c_idx]:
+                c = cam_raw[i]
+                c_min, c_max = c.min(), c.max()
+                if c_max - c_min > 1e-8:
+                    cam_raw[i] = (c - c_min) / (c_max - c_min)
+                else:
+                    cam_raw[i] = torch.zeros_like(c)
+
+        cam_tensor[:, c_idx] = cam_raw
+
+    del logits, activations
+
+    # Batched attention preparation — stack all 12 layers' attention
+    # Each batch_attn[k]: (B, L, L), attn_weight_last: (B, L, L)
+    all_attn = list(batch_attn) + [attn_weight_last]
+    # Stack → (num_layers, B, L, L), take last 8, strip CLS
+    all_attn = torch.stack(all_attn, dim=0)[-8:]  # (8, B, L, L)
+    all_attn = all_attn[:, :, 1:, 1:]             # (8, B, L-1, L-1)
+    all_attn = all_attn.float().mean(dim=0)        # (B, L-1, L-1)
+
+    # Per-image attention refinement (vectorized where possible)
+    results = [None] * B
+    for i in range(B):
+        active_classes = label_mask[i].nonzero(as_tuple=True)[0].tolist()
+        if not active_classes:
+            continue
+
+        keys = active_classes
+        attn_i = all_attn[i]  # (L-1, L-1) on GPU
 
         refined_cams = []
         for c_idx in keys:
-            cam = image_cams[i][c_idx]
-            if no_refine:
-                cam_highres = cv2.resize(cam, (items[i]["ori_w"], items[i]["ori_h"]))
-                refined_cams.append(torch.tensor(cam_highres))
-            else:
-                cam_refined = refine_cam_with_attention(
-                    cam, attn_i, box_threshold,
-                    h, w, items[i]["ori_w"], items[i]["ori_h"],
-                )
-                refined_cams.append(torch.tensor(cam_refined))
+            cam = cam_tensor[i, c_idx]  # (Hp, Wp) on GPU
 
-        results[i] = (torch.tensor(keys), torch.stack(refined_cams, dim=0))
+            if no_refine:
+                cam_highres = F.interpolate(
+                    cam.unsqueeze(0).unsqueeze(0),
+                    size=(items[i]["ori_h"], items[i]["ori_w"]),
+                    mode='bilinear', align_corners=False,
+                ).squeeze()
+                refined_cams.append(cam_highres)
+            else:
+                cam_refined = _refine_cam_gpu(
+                    cam, attn_i, box_threshold,
+                    Hp, Wp, items[i]["ori_w"], items[i]["ori_h"],
+                )
+                refined_cams.append(cam_refined)
+
+        results[i] = (torch.tensor(keys, device=device),
+                      torch.stack(refined_cams, dim=0))
 
     return results
+
+
+def _refine_cam_gpu(cam, attn_weight, box_threshold, h, w, ori_width, ori_height):
+    """GPU-only attention refinement — avoids CPU/GPU transfers."""
+    # Bounding box from CAM
+    cam_np = cam.detach().cpu().numpy()
+    box, cnt = scoremap2bbox(
+        scoremap=cam_np, threshold=box_threshold, multi_contour_eval=True,
+    )
+
+    aff_mask = torch.zeros((cam.shape[0], cam.shape[1]), device=cam.device)
+    for i_ in range(cnt):
+        x0_, y0_, x1_, y1_ = box[i_]
+        aff_mask[y0_:y1_, x0_:x1_] = 1
+
+    aff_mask = aff_mask.view(1, cam.shape[0] * cam.shape[1])
+
+    trans_mat = attn_weight.float()
+    trans_mat = trans_mat / trans_mat.sum(dim=0, keepdim=True)
+    trans_mat = trans_mat / trans_mat.sum(dim=1, keepdim=True)
+
+    for _ in range(2):
+        trans_mat = trans_mat / trans_mat.sum(dim=0, keepdim=True)
+        trans_mat = trans_mat / trans_mat.sum(dim=1, keepdim=True)
+    trans_mat = (trans_mat + trans_mat.T) / 2
+
+    trans_mat = torch.mm(trans_mat, trans_mat)
+    trans_mat = trans_mat * aff_mask
+
+    cam_flat = cam.float().reshape(-1, 1)
+    cam_refined = torch.mm(trans_mat, cam_flat).reshape(h // 16, w // 16)
+
+    # Normalize to [0, 1]
+    c_min, c_max = cam_refined.min(), cam_refined.max()
+    if c_max - c_min > 1e-8:
+        cam_refined = (cam_refined - c_min) / (c_max - c_min)
+
+    # Upsample on GPU
+    cam_refined = F.interpolate(
+        cam_refined.unsqueeze(0).unsqueeze(0),
+        size=(ori_height, ori_width),
+        mode='bilinear', align_corners=False,
+    ).squeeze()
+
+    return cam_refined
 
 
 # ---------------------------------------------------------------------------
@@ -738,7 +811,7 @@ def perform(process_id, dataset_list, args, all_label_list=None):
 
         # Check if all images in batch share the same (h, w) for batching
         hw_set = set((it["h"], it["w"]) for it in batch)
-        use_batch = len(hw_set) == 1 and len(batch) > 1
+        use_batch = len(hw_set) == 1
 
         if use_batch:
             # Batched encode_image
