@@ -782,8 +782,6 @@ def perform(process_id, dataset_list, args, all_label_list=None):
 
             h, w = _scaled_hw(ori_h, ori_w, scale=image_scale,
                               max_long_side=max_long_side)
-            preprocess = _transform_resize(h, w)
-            image_tensor = preprocess(Image.open(img_path).convert("RGB"))
 
             item.update({
                 "img_path": img_path,
@@ -791,7 +789,6 @@ def perform(process_id, dataset_list, args, all_label_list=None):
                 "h": h, "w": w,
                 "label_list": label_list,
                 "label_id_list": label_id_list,
-                "image_tensor": image_tensor,
             })
             work_items.append(item)
 
@@ -814,9 +811,14 @@ def perform(process_id, dataset_list, args, all_label_list=None):
         use_batch = len(hw_set) == 1
 
         if use_batch:
-            # Batched encode_image
+            # Batched encode_image — load images on-the-fly
             h, w = batch[0]["h"], batch[0]["w"]
-            batch_tensor = torch.stack([it["image_tensor"] for it in batch])
+            preprocess = _transform_resize(h, w)
+            tensors = []
+            for it in batch:
+                img = Image.open(it["img_path"]).convert("RGB")
+                tensors.append(preprocess(img))
+            batch_tensor = torch.stack(tensors)
             batch_tensor = batch_tensor.to(device_id).type(model.dtype)
 
             with torch.no_grad():
