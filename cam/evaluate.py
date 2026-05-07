@@ -252,37 +252,28 @@ def run_eval_with_crf(eval_list, cam_dir, gt_root, image_root, cam_type,
 # ---------------------------------------------------------------------------
 
 def run_eval_cam(eval_list, cam_dir, gt_root, cam_type, cam_eval_thres,
-                 n_class, dataset, use_bg_channel=True):
-    preds = []
-    labels = []
-    missing_gt = 0
-    missing_cam = 0
+                 n_class, dataset, use_bg_channel=True, n_jobs=-1):
+    import joblib
+    import multiprocessing
 
-    for entry in eval_list:
+    if n_jobs < 0:
+        n_jobs = multiprocessing.cpu_count()
+
+    def process_one(entry):
         stem = entry_stem(entry)
         cam_npy = osp.join(cam_dir, stem + ".npy")
         cam_png = osp.join(cam_dir, stem + ".png")
         gt_file = resolve_label_path(gt_root, entry)
 
         if not osp.isfile(gt_file):
-            if missing_gt < 3:
-                print(f"[DEBUG] GT not found: {gt_file}")
-            missing_gt += 1
-            continue
-
+            return None
         if cam_type == "png":
             if not osp.isfile(cam_png):
-                if missing_cam < 3:
-                    print(f"[DEBUG] CAM png not found: {cam_png}")
-                missing_cam += 1
-                continue
+                return None
             cls_labels = np.asarray(Image.open(cam_png), dtype=np.uint8)
         else:
             if not osp.isfile(cam_npy):
-                if missing_cam < 3:
-                    print(f"[DEBUG] CAM npy not found: {cam_npy}")
-                missing_cam += 1
-                continue
+                return None
             cls_labels = load_pred_from_npy(
                 cam_npy, cam_type, cam_eval_thres,
                 use_bg_channel=use_bg_channel, n_class=n_class,
@@ -298,8 +289,23 @@ def run_eval_cam(eval_list, cam_dir, gt_root, cam_type, cam_eval_thres,
             cls_labels = map_mask_to_synthia16(cls_labels)
             gt = map_mask_to_synthia16(gt)
 
-        preds.append(cls_labels)
-        labels.append(gt)
+        return cls_labels, gt
+
+    results = joblib.Parallel(n_jobs=n_jobs, verbose=0, pre_dispatch="all")(
+        [joblib.delayed(process_one)(entry) for entry in eval_list]
+    )
+
+    missing_gt = 0
+    missing_cam = 0
+    preds = []
+    labels = []
+    for r in results:
+        if r is not None:
+            preds.append(r[0])
+            labels.append(r[1])
+        else:
+            # Can't distinguish gt vs cam miss here, count as generic miss
+            missing_cam += 1
 
     if len(preds) == 0:
         import glob
@@ -309,15 +315,14 @@ def run_eval_cam(eval_list, cam_dir, gt_root, cam_type, cam_eval_thres,
             f"No valid prediction/GT pairs found.\n"
             f"  cam_dir: {cam_dir} ({npy_count} .npy files found)\n"
             f"  gt_root: {gt_root}\n"
-            f"  missing_gt: {missing_gt}, missing_cam: {missing_cam}\n"
+            f"  missing: {missing_cam}\n"
             f"  sample entries: {sample_entries}\n"
             f"  sample stems: {[entry_stem(e) for e in sample_entries]}"
         )
 
     total_missing = missing_gt + missing_cam
     if total_missing > 0:
-        print(f"[WARN] skipped {total_missing} items "
-              f"(missing_gt={missing_gt}, missing_cam={missing_cam})")
+        print(f"[WARN] skipped {total_missing} items")
 
     result = compute_scores(labels, preds, n_class=n_class)
     return result
