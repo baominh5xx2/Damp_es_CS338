@@ -20,6 +20,7 @@ import argparse
 import os
 
 import numpy as np
+from PIL import Image
 
 from cam.evaluate import (
     compute_scores,
