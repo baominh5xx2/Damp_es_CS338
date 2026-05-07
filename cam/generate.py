@@ -26,6 +26,7 @@ from cam.clip_text import (
     CITYSCAPES_CLASS_NAMES,
     CITYSCAPES_PROMPT_NAMES,
     ID_TO_TRAINID,
+    SYNTHIA_16_TO_CITYSCAPES_19,
     class_names,
     new_class_names,
     new_class_names_coco,
@@ -41,6 +42,13 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Dataset registry — maps dataset name to its class-name lists & bg list
 # ---------------------------------------------------------------------------
+
+SYNTHIA_16_CLASS_NAMES = [
+    "road", "sidewalk", "building", "wall", "fence",
+    "pole", "traffic light", "traffic sign", "vegetation",
+    "sky", "person", "rider", "car",
+    "bus", "motorcycle", "bicycle",
+]
 
 DATASET_CONFIGS = {
     "voc12": {
@@ -74,6 +82,8 @@ DATASET_CONFIGS = {
     "synthia": {
         "fg_classnames": CITYSCAPES_PROMPT_NAMES,
         "plain_classnames": CITYSCAPES_CLASS_NAMES,
+        "damp_classnames": SYNTHIA_16_CLASS_NAMES,
+        "damp_to_cit19": SYNTHIA_16_TO_CITYSCAPES_19,
         "bg_categories": BACKGROUND_CATEGORY,
         "box_threshold": 0.4,
         "max_long_side": 1024,
@@ -351,8 +361,10 @@ def build_worker_components(args, device):
 
     if args.damp_prompt_ckpt:
         print("Using DAMP prompt checkpoint:", args.damp_prompt_ckpt)
-        damp_use_plain = bool(getattr(args, "damp_use_plain_names", True))
-        if ds_cfg["plain_classnames"] is not None and damp_use_plain:
+        # Use DAMP-specific class names if available (matches training classes)
+        if ds_cfg.get("damp_classnames") is not None:
+            damp_classnames = ds_cfg["damp_classnames"]
+        elif ds_cfg["plain_classnames"] is not None:
             damp_classnames = ds_cfg["plain_classnames"]
         else:
             damp_classnames = ds_cfg["fg_classnames"]
@@ -361,6 +373,19 @@ def build_worker_components(args, device):
         damp_text_features = damp_prompt_classifier(
             damp_classnames, model, args.damp_prompt_ckpt, device, args.damp_n_ctx,
         )
+
+        # Map DAMP features to Cityscapes-19 aligned index space if needed
+        damp_mapping = ds_cfg.get("damp_to_cit19")
+        if damp_mapping is not None:
+            n_cit19 = max(damp_mapping.values()) + 1
+            mapped = torch.zeros(n_cit19, damp_text_features.shape[1],
+                                 device=device, dtype=model.dtype)
+            for local_id, cit19_id in damp_mapping.items():
+                mapped[cit19_id] = damp_text_features[local_id]
+            # Normalize mapped features
+            mapped = F.normalize(mapped, dim=-1)
+            damp_text_features = mapped
+            print(f"DAMP features remapped: {len(damp_classnames)} → {n_cit19} classes")
 
         damp_mix_alpha = max(0.0, min(1.0, float(getattr(args, "damp_mix_alpha", 1.0))))
         if damp_mix_alpha < 1.0:
