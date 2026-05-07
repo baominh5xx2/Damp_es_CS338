@@ -368,7 +368,7 @@ def build_worker_components(args, device):
             damp_classnames = ds_cfg["plain_classnames"]
         else:
             damp_classnames = ds_cfg["fg_classnames"]
-        print("DAMP classnames:", "plain" if damp_use_plain else "synonym")
+        print(f"DAMP classnames ({len(damp_classnames)}): {damp_classnames[:3]}...")
 
         damp_text_features = damp_prompt_classifier(
             damp_classnames, model, args.damp_prompt_ckpt, device, args.damp_n_ctx,
