@@ -189,19 +189,28 @@ def _encode_text_with_prompt_embeddings(model, prompt_embeddings, tokenized_prom
 
 
 def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
+    """Load DAMP prompt learner + context_decoder from checkpoint.
+
+    Returns (raw_text_features, context_decoder, gamma_t) or
+            (raw_text_features, None, None) if no context_decoder in ckpt.
+    """
     checkpoint = torch.load(ckpt_path, map_location="cpu")
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        checkpoint = checkpoint["state_dict"]
+    sd = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
 
-    ctx = checkpoint.get("ctx", None)
-    if ctx is None:
-        for key in checkpoint:
-            if key.endswith(".ctx"):
-                ctx = checkpoint[key]
-                break
+    # Handle torch.compile prefix
+    ctx_key = None
+    gamma_t_key = None
+    for key in sd:
+        if key.endswith(".ctx") or key == "ctx":
+            ctx_key = key
+        if key.endswith(".gamma_t") or key == "gamma_t":
+            gamma_t_key = key
 
-    if ctx is None:
+    if ctx_key is None:
         raise KeyError("Cannot find ctx in DAMP prompt checkpoint")
+
+    ctx = sd[ctx_key]
+    gamma_t = sd[gamma_t_key].item() if gamma_t_key else 0.0
 
     if n_ctx <= 0:
         n_ctx = ctx.shape[-2]
@@ -226,10 +235,31 @@ def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
     ctx = ctx[:, :n_ctx, :].to(device=device, dtype=model.dtype)
     prompt_embeddings[:, 1:1+n_ctx, :] = ctx
 
-    text_features = _encode_text_with_prompt_embeddings(
+    raw_text_features = _encode_text_with_prompt_embeddings(
         model, prompt_embeddings, tokenized_prompts
     )
-    return text_features
+
+    # Load context_decoder if available
+    ctx_dec_state = checkpoint.get("context_decoder") if isinstance(checkpoint, dict) else None
+    context_decoder = None
+    if ctx_dec_state is not None:
+        from trainers.damp import ContextDecoder
+        import yacs.config
+        # Minimal config for ContextDecoder
+        class _Cfg:
+            class MODEL:
+                BACKBONE_NAME = "ViT-B/16"
+        context_decoder = ContextDecoder(_Cfg()).to(device)
+        # Handle torch.compile prefix
+        cleaned = {}
+        prefix = "_orig_mod."
+        for k, v in ctx_dec_state.items():
+            cleaned[k.removeprefix(prefix)] = v
+        context_decoder.load_state_dict(cleaned)
+        context_decoder.eval()
+        print(f"DAMP context_decoder loaded (gamma_t={gamma_t:.4f})")
+
+    return raw_text_features, context_decoder, gamma_t
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +400,7 @@ def build_worker_components(args, device):
             damp_classnames = ds_cfg["fg_classnames"]
         print(f"DAMP classnames ({len(damp_classnames)}): {damp_classnames[:3]}...")
 
-        damp_text_features = damp_prompt_classifier(
+        damp_text_features, context_decoder, gamma_t = damp_prompt_classifier(
             damp_classnames, model, args.damp_prompt_ckpt, device, args.damp_n_ctx,
         )
 
@@ -382,7 +412,6 @@ def build_worker_components(args, device):
                                  device=device, dtype=model.dtype)
             for local_id, cit19_id in damp_mapping.items():
                 mapped[cit19_id] = damp_text_features[local_id]
-            # Normalize mapped features
             mapped = F.normalize(mapped, dim=-1)
             damp_text_features = mapped
             print(f"DAMP features remapped: {len(damp_classnames)} → {n_cit19} classes")
@@ -404,11 +433,13 @@ def build_worker_components(args, device):
         fg_text_features = zeroshot_classifier(
             ds_cfg["fg_classnames"], ["a clean origami {}."], model, device,
         )
+        context_decoder = None
+        gamma_t = 0.0
 
     target_layers = [model.visual.transformer.resblocks[-1].ln_1]
     cam = GradCAM(model=model, target_layers=target_layers,
                   reshape_transform=reshape_transform)
-    return model, bg_text_features, fg_text_features, cam
+    return model, bg_text_features, fg_text_features, cam, context_decoder, gamma_t
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +488,8 @@ def refine_cam_with_attention(grayscale_cam, attn_weight, box_threshold, h, w,
 
 def generate_cam_for_image(model, cam_method, fg_text_features, bg_text_features,
                            img_path, ori_height, ori_width, label_list,
-                           label_id_list, args, device, ds_cfg):
+                           label_id_list, args, device, ds_cfg,
+                           context_decoder=None, gamma_t=0.0):
     image_scale = float(getattr(args, "image_scale", 1.0))
     max_long_side = int(getattr(args, "max_long_side", ds_cfg["max_long_side"]))
     no_refine = bool(getattr(args, "no_refine", False))
@@ -479,9 +511,44 @@ def generate_cam_for_image(model, cam_method, fg_text_features, bg_text_features
         refined_cam_to_save = []
         keys = []
 
-        bg_features_temp = bg_text_features.to(device)
-        fg_features_temp = fg_text_features[label_id_list].to(device)
-        text_features_temp = torch.cat([fg_features_temp, bg_features_temp], dim=0)
+        # Adapt text features with context_decoder if available
+        if context_decoder is not None and gamma_t > 0:
+            with torch.no_grad():
+                # Get visual features from image_features (after 11 blocks)
+                # image_features: (1, L, D), need global feat
+                feat = image_features.permute(1, 0, 2)  # LND
+                last_block = model.visual.transformer.resblocks[-1]
+                feat_out, _ = last_block(feat)
+                feat_out = feat_out.permute(1, 0, 2)  # NLD
+                feat_out = model.visual.ln_post(feat_out)
+                if model.visual.proj is not None:
+                    feat_out = feat_out @ model.visual.proj
+                global_feat = feat_out[:, 0]  # (1, D)
+                Hp, Wp = h // 16, w // 16
+                local_feat = feat_out[:, 1:].reshape(1, -1, Hp, Wp)  # (1, D, Hp, Wp)
+
+                # Build visual context
+                visual_contexts = torch.cat([
+                    global_feat.reshape(1, -1, 1),
+                    local_feat.reshape(1, -1, Hp * Wp),
+                ], dim=2).permute(0, 2, 1)  # (1, 1+HW, D)
+
+                # Raw text features for selected classes
+                raw_fg = fg_text_features[label_id_list].to(device)  # (K, D)
+                raw_fg_3d = raw_fg.unsqueeze(0)  # (1, K, D)
+
+                # context_decoder adapt
+                text_diff = context_decoder(raw_fg_3d, visual_contexts)  # (1, K, D)
+                adapted_fg = raw_fg_3d + gamma_t * text_diff  # (1, K, D)
+                adapted_fg = F.normalize(adapted_fg.squeeze(0), dim=-1)  # (K, D)
+
+                bg_features_temp = bg_text_features.to(device)
+                text_features_temp = torch.cat([adapted_fg, bg_features_temp], dim=0)
+        else:
+            bg_features_temp = bg_text_features.to(device)
+            fg_features_temp = fg_text_features[label_id_list].to(device)
+            text_features_temp = torch.cat([fg_features_temp, bg_features_temp], dim=0)
+
         input_tensor = [image_features, text_features_temp.to(device), h, w]
 
         attn_weight = None
@@ -560,7 +627,7 @@ def perform(process_id, dataset_list, args, all_label_list=None):
     skip_existing = bool(getattr(args, "skip_existing", False))
 
     ds_cfg = DATASET_CONFIGS[args.dataset]
-    model, bg_text_features, fg_text_features, cam = build_worker_components(args, device_id)
+    model, bg_text_features, fg_text_features, cam, context_decoder, gamma_t = build_worker_components(args, device_id)
     bg_text_features = bg_text_features.to(device_id)
     fg_text_features = fg_text_features.to(device_id)
 
@@ -660,6 +727,7 @@ def perform(process_id, dataset_list, args, all_label_list=None):
                 item["img_path"], item["ori_h"], item["ori_w"],
                 item["label_list"], item["label_id_list"],
                 args, device_id, ds_cfg,
+                context_decoder=context_decoder, gamma_t=gamma_t,
             )
             out_path = osp.join(args.cam_out_dir, item["stem"] + ".npy")
             np.save(out_path, {

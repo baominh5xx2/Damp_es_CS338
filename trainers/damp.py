@@ -966,7 +966,7 @@ class DAMP(TrainerXU):
             self.save_model(self.epoch, self.output_dir)
 
     def _export_prompt_learner_bridge(self):
-        """Export prompt_learner state dict for the CLIP-ES CAM pipeline.
+        """Export prompt_learner + context_decoder state dicts for the CLIP-ES CAM pipeline.
 
         This file is the canonical hand-off artifact between phases:
         ``generate_cams.py --damp_prompt_ckpt <output_dir>/prompt_learner.pth``.
@@ -974,11 +974,16 @@ class DAMP(TrainerXU):
         os.makedirs(self.output_dir, exist_ok=True)
         out = osp.join(self.output_dir, "prompt_learner.pth")
         state = self.model.prompt_learner.state_dict()
+        ctx_state = self.model.context_decoder.state_dict()
         torch.save(
-            {"state_dict": state, "n_ctx": self.model.prompt_learner.n_ctx},
+            {
+                "state_dict": state,
+                "n_ctx": self.model.prompt_learner.n_ctx,
+                "context_decoder": ctx_state,
+            },
             out,
         )
-        print(f"[bridge] Saved prompt_learner weights → {out}")
+        print(f"[bridge] Saved prompt_learner + context_decoder weights → {out}")
 
     def load_model(self, directory, epoch=None):
         if not directory:
