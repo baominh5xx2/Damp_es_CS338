@@ -291,7 +291,7 @@ def run_eval_cam(eval_list, cam_dir, gt_root, cam_type, cam_eval_thres,
 
         return cls_labels, gt
 
-    results = joblib.Parallel(n_jobs=n_jobs, verbose=0, pre_dispatch="all")(
+    results = joblib.Parallel(n_jobs=n_jobs, verbose=10, pre_dispatch="all")(
         [joblib.delayed(process_one)(entry) for entry in eval_list]
     )
 
