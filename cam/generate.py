@@ -496,9 +496,9 @@ def _batched_efficient_cam(model, aag, fg_text_features, bg_text_features,
 
         if not no_refine:
             # Per-image attention weights — keep on GPU
-            aw_i = [aw[i] for aw in batch_attn]
-            aw_i.append(attn_weight_last[i])
-            aw_i = [a[:, 1:, 1:] for a in aw_i]
+            aw_i = [aw[i:i+1] for aw in batch_attn]
+            aw_i.append(attn_weight_last[i:i+1])
+            aw_i = [a[0, 1:, 1:] for a in aw_i]
             aw_i = torch.stack(aw_i, dim=0)[-8:]
             aw_i = torch.mean(aw_i, dim=0)
             attn_i = aw_i.to(device).float()
