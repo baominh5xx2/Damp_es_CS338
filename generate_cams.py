@@ -56,13 +56,19 @@ def main():
                         help="Number of context tokens (-1 = auto-detect from ckpt)")
     parser.add_argument("--damp_mix_alpha", type=float, default=1.0,
                         help="Blend weight: 1.0=DAMP only, 0.0=zero-shot only")
-    parser.add_argument("--damp_use_plain_names", dest="damp_use_plain_names",
-                        action="store_true",
-                        help="Use plain class names with DAMP prompts (recommended)")
-    parser.add_argument("--damp_use_synonym_names", dest="damp_use_plain_names",
-                        action="store_false",
-                        help="Use synonym-expanded class names with DAMP prompts")
-    parser.set_defaults(damp_use_plain_names=True)
+    parser.add_argument("--damp_name_mode", type=str, default="train",
+                        choices=["train", "plain", "synonym"],
+                        help=(
+                            "Class-name strings used to rebuild DAMP prompts: "
+                            "train=match the DAMP training dataset, plain=vanilla "
+                            "class names, synonym=CLIP-ES synonym-expanded names."
+                        ))
+    parser.add_argument("--damp_use_plain_names", dest="damp_name_mode",
+                        action="store_const", const="plain",
+                        help="Backward-compatible alias for --damp_name_mode plain")
+    parser.add_argument("--damp_use_synonym_names", dest="damp_name_mode",
+                        action="store_const", const="synonym",
+                        help="Backward-compatible alias for --damp_name_mode synonym")
 
     args = parser.parse_args()
 

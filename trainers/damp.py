@@ -447,7 +447,9 @@ class CustomCLIP(nn.Module):
         tokenized_prompts = self.tokenized_prompts
         text_embeddings, text_contexts = self.text_encoder(raw_prompt, tokenized_prompts)
         text_embeddings = text_embeddings.expand(B, -1, -1)
-        text_contexts = text_contexts.expand(B, -1, -1, -1)[:, 0, :self.prompt_learner.n_ctx, :]
+        text_contexts = text_contexts.expand(B, -1, -1, -1)[
+            :, 0, 1:1 + self.prompt_learner.n_ctx, :
+        ]
 
         if self.use_visual_prompt_generator:
             vis_prompt_diff = self.context_decoder(

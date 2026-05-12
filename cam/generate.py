@@ -26,8 +26,10 @@ from cam.clip_text import (
     CITYSCAPES_CLASS_NAMES,
     CITYSCAPES_PROMPT_NAMES,
     ID_TO_TRAINID,
+    SYNTHIA_PROMPT_NAMES,
     SYNTHIA_16_TO_CITYSCAPES_19,
     class_names,
+    class_names_coco,
     new_class_names,
     new_class_names_coco,
 )
@@ -54,13 +56,19 @@ DATASET_CONFIGS = {
     "voc12": {
         "fg_classnames": new_class_names,
         "plain_classnames": class_names,
+        "damp_train_classnames": new_class_names,
+        "damp_plain_classnames": class_names,
+        "damp_synonym_classnames": new_class_names,
         "bg_categories": BACKGROUND_CATEGORY,
         "box_threshold": 0.4,
         "max_long_side": -1,
     },
     "coco14": {
         "fg_classnames": new_class_names_coco,
-        "plain_classnames": None,
+        "plain_classnames": class_names_coco,
+        "damp_train_classnames": new_class_names_coco,
+        "damp_plain_classnames": class_names_coco,
+        "damp_synonym_classnames": new_class_names_coco,
         "bg_categories": BACKGROUND_CATEGORY_COCO,
         "box_threshold": 0.7,
         "max_long_side": -1,
@@ -68,6 +76,9 @@ DATASET_CONFIGS = {
     "gta5": {
         "fg_classnames": CITYSCAPES_PROMPT_NAMES,
         "plain_classnames": CITYSCAPES_CLASS_NAMES,
+        "damp_train_classnames": CITYSCAPES_CLASS_NAMES,
+        "damp_plain_classnames": CITYSCAPES_CLASS_NAMES,
+        "damp_synonym_classnames": CITYSCAPES_PROMPT_NAMES,
         "bg_categories": BACKGROUND_CATEGORY,
         "box_threshold": 0.4,
         "max_long_side": 1024,
@@ -75,6 +86,9 @@ DATASET_CONFIGS = {
     "cityscapes": {
         "fg_classnames": CITYSCAPES_PROMPT_NAMES,
         "plain_classnames": CITYSCAPES_CLASS_NAMES,
+        "damp_train_classnames": CITYSCAPES_CLASS_NAMES,
+        "damp_plain_classnames": CITYSCAPES_CLASS_NAMES,
+        "damp_synonym_classnames": CITYSCAPES_PROMPT_NAMES,
         "bg_categories": BACKGROUND_CATEGORY,
         "box_threshold": 0.4,
         "max_long_side": 1024,
@@ -82,7 +96,9 @@ DATASET_CONFIGS = {
     "synthia": {
         "fg_classnames": CITYSCAPES_PROMPT_NAMES,
         "plain_classnames": CITYSCAPES_CLASS_NAMES,
-        "damp_classnames": SYNTHIA_16_CLASS_NAMES,
+        "damp_train_classnames": SYNTHIA_16_CLASS_NAMES,
+        "damp_plain_classnames": SYNTHIA_16_CLASS_NAMES,
+        "damp_synonym_classnames": SYNTHIA_PROMPT_NAMES,
         "damp_to_cit19": SYNTHIA_16_TO_CITYSCAPES_19,
         "bg_categories": BACKGROUND_CATEGORY,
         "box_threshold": 0.4,
@@ -244,12 +260,15 @@ def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
     context_decoder = None
     if ctx_dec_state is not None:
         from trainers.damp import ContextDecoder
-        import yacs.config
-        # Minimal config for ContextDecoder
-        class _Cfg:
-            class MODEL:
-                BACKBONE_NAME = "ViT-B/16"
-        context_decoder = ContextDecoder(_Cfg()).to(device)
+        from types import SimpleNamespace
+
+        backbone_name = "RN50" if hasattr(model.visual, "attnpool") else "ViT-B/16"
+        cfg = SimpleNamespace(
+            MODEL=SimpleNamespace(
+                BACKBONE=SimpleNamespace(NAME=backbone_name)
+            )
+        )
+        context_decoder = ContextDecoder(cfg).to(device)
         # Handle torch.compile prefix
         cleaned = {}
         prefix = "_orig_mod."
@@ -260,6 +279,17 @@ def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
         print(f"DAMP context_decoder loaded (gamma_t={gamma_t:.4f})")
 
     return raw_text_features, context_decoder, gamma_t
+
+
+def _select_damp_classnames(ds_cfg, args):
+    mode = getattr(args, "damp_name_mode", "train")
+    if mode == "train":
+        return ds_cfg["damp_train_classnames"], mode
+    if mode == "plain":
+        return ds_cfg["damp_plain_classnames"], mode
+    if mode == "synonym":
+        return ds_cfg["damp_synonym_classnames"], mode
+    raise ValueError(f"Unknown DAMP class-name mode: {mode}")
 
 
 # ---------------------------------------------------------------------------
@@ -391,14 +421,11 @@ def build_worker_components(args, device):
 
     if args.damp_prompt_ckpt:
         print("Using DAMP prompt checkpoint:", args.damp_prompt_ckpt)
-        # Use DAMP-specific class names if available (matches training classes)
-        if ds_cfg.get("damp_classnames") is not None:
-            damp_classnames = ds_cfg["damp_classnames"]
-        elif ds_cfg["plain_classnames"] is not None:
-            damp_classnames = ds_cfg["plain_classnames"]
-        else:
-            damp_classnames = ds_cfg["fg_classnames"]
-        print(f"DAMP classnames ({len(damp_classnames)}): {damp_classnames[:3]}...")
+        damp_classnames, damp_name_mode = _select_damp_classnames(ds_cfg, args)
+        print(
+            f"DAMP classnames ({damp_name_mode}, {len(damp_classnames)}): "
+            f"{damp_classnames[:3]}..."
+        )
 
         damp_text_features, context_decoder, gamma_t = damp_prompt_classifier(
             damp_classnames, model, args.damp_prompt_ckpt, device, args.damp_n_ctx,
