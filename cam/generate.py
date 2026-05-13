@@ -188,7 +188,8 @@ def zeroshot_classifier(classnames, templates, model, device):
     return zeroshot_weights.t()
 
 
-def _encode_text_with_prompt_embeddings(model, prompt_embeddings, tokenized_prompts):
+def _encode_text_with_prompt_embeddings(model, prompt_embeddings, tokenized_prompts,
+                                        normalize=True):
     x = prompt_embeddings + model.positional_embedding.type(model.dtype)
     x = x.permute(1, 0, 2)  # NLD -> LND
     x = model.transformer(x)
@@ -200,7 +201,8 @@ def _encode_text_with_prompt_embeddings(model, prompt_embeddings, tokenized_prom
         torch.arange(x.shape[0], device=tokenized_prompts.device),
         tokenized_prompts.argmax(dim=-1)
     ] @ model.text_projection
-    text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+    if normalize:
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
     return text_features
 
 
@@ -251,10 +253,6 @@ def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
     ctx = ctx[:, :n_ctx, :].to(device=device, dtype=model.dtype)
     prompt_embeddings[:, 1:1+n_ctx, :] = ctx
 
-    raw_text_features = _encode_text_with_prompt_embeddings(
-        model, prompt_embeddings, tokenized_prompts
-    )
-
     # Load context_decoder if available
     ctx_dec_state = checkpoint.get("context_decoder") if isinstance(checkpoint, dict) else None
     context_decoder = None
@@ -277,6 +275,11 @@ def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
         context_decoder.load_state_dict(cleaned)
         context_decoder.eval()
         print(f"DAMP context_decoder loaded (gamma_t={gamma_t:.4f})")
+
+    raw_text_features = _encode_text_with_prompt_embeddings(
+        model, prompt_embeddings, tokenized_prompts,
+        normalize=context_decoder is None,
+    )
 
     return raw_text_features, context_decoder, gamma_t
 
@@ -439,7 +442,8 @@ def build_worker_components(args, device):
                                  device=device, dtype=model.dtype)
             for local_id, cit19_id in damp_mapping.items():
                 mapped[cit19_id] = damp_text_features[local_id]
-            mapped = F.normalize(mapped, dim=-1)
+            if context_decoder is None:
+                mapped = F.normalize(mapped, dim=-1)
             damp_text_features = mapped
             print(f"DAMP features remapped: {len(damp_classnames)} → {n_cit19} classes")
 
@@ -449,10 +453,12 @@ def build_worker_components(args, device):
                 ds_cfg["fg_classnames"], ["a clean origami {}."], model, device,
             )
             fg_text_features = F.normalize(
-                damp_mix_alpha * damp_text_features
+                damp_mix_alpha * F.normalize(damp_text_features, dim=-1)
                 + (1.0 - damp_mix_alpha) * anchor_text_features,
                 dim=-1,
             )
+            context_decoder = None
+            gamma_t = 0.0
             print(f"DAMP/zero-shot mix alpha={damp_mix_alpha:.2f}")
         else:
             fg_text_features = damp_text_features
