@@ -541,9 +541,10 @@ def generate_cam_for_image(model, cam_method, fg_text_features, bg_text_features
         # Adapt text features with context_decoder if available
         if context_decoder is not None and gamma_t > 0:
             with torch.no_grad():
-                # Get visual features from image_features (after 11 blocks)
-                # image_features: (1, L, D), need global feat
-                feat = image_features.permute(1, 0, 2)  # LND
+                # Get visual features from image_features (after 11 blocks).
+                # encode_image returns LND, which is exactly what a residual
+                # attention block expects.
+                feat = image_features
                 last_block = model.visual.transformer.resblocks[-1]
                 feat_out, _ = last_block(feat)
                 feat_out = feat_out.permute(1, 0, 2)  # NLD
