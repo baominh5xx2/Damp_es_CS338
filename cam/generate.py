@@ -561,23 +561,38 @@ def generate_cam_for_image(model, cam_method, fg_text_features, bg_text_features
                     local_feat.reshape(1, -1, Hp * Wp),
                 ], dim=2).permute(0, 2, 1)  # (1, 1+HW, D)
 
+                decoder_dtype = next(context_decoder.parameters()).dtype
+
                 # Raw text features for selected classes
-                raw_fg = fg_text_features[label_id_list].to(device)  # (K, D)
+                raw_fg = fg_text_features[label_id_list].to(
+                    device=device,
+                    dtype=decoder_dtype,
+                )  # (K, D)
                 raw_fg_3d = raw_fg.unsqueeze(0)  # (1, K, D)
 
                 # context_decoder adapt
-                text_diff = context_decoder(raw_fg_3d, visual_contexts)  # (1, K, D)
+                text_diff = context_decoder(
+                    raw_fg_3d,
+                    visual_contexts.to(dtype=decoder_dtype),
+                )  # (1, K, D)
                 adapted_fg = raw_fg_3d + gamma_t * text_diff  # (1, K, D)
                 adapted_fg = F.normalize(adapted_fg.squeeze(0), dim=-1)  # (K, D)
 
-                bg_features_temp = bg_text_features.to(device)
+                bg_features_temp = bg_text_features.to(
+                    device=device,
+                    dtype=adapted_fg.dtype,
+                )
                 text_features_temp = torch.cat([adapted_fg, bg_features_temp], dim=0)
         else:
             bg_features_temp = bg_text_features.to(device)
             fg_features_temp = fg_text_features[label_id_list].to(device)
             text_features_temp = torch.cat([fg_features_temp, bg_features_temp], dim=0)
 
-        input_tensor = [image_features, text_features_temp.to(device), h, w]
+        text_features_temp = text_features_temp.to(
+            device=device,
+            dtype=image_features.dtype,
+        )
+        input_tensor = [image_features, text_features_temp, h, w]
 
         attn_weight = None
 
