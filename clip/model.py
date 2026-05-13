@@ -217,12 +217,13 @@ class Transformer(nn.Module):
         super().__init__()
         self.width = width
         self.layers = layers
+        self.is_text_transformer = attn_mask is not None
         self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
         attn_weights = []
         with torch.no_grad():
-            layers = self.layers if x.shape[0] == 77 else self.layers-1
+            layers = self.layers if self.is_text_transformer else self.layers-1
             for i in range(layers):
                 x, attn_weight = self.resblocks[i](x)
                 attn_weights.append(attn_weight)
