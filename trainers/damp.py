@@ -510,7 +510,7 @@ class DAMP(TrainerXU):
         self.lab2cname = self.dm.lab2cname
 
         self.eval_threshold = 0.5
-        self.pseudo_threshold = 0.55
+        self.pseudo_threshold = float(cfg.TRAINER.DAMP.TAU)
         self.multi_label_lookup = self._build_multilabel_lookup()
 
     def build_model(self):
@@ -717,7 +717,7 @@ class DAMP(TrainerXU):
         self.after_train()
 
     def run_epoch(self):
-        self.threshold = self.cfg.TRAINER.DAMP.TAU
+        self.pseudo_threshold = float(self.cfg.TRAINER.DAMP.TAU)
         self.set_model_mode("train")
         losses = MetricMeter()
         batch_time, data_time = AverageMeter(), AverageMeter()
@@ -866,6 +866,8 @@ class DAMP(TrainerXU):
             "acc_x": multilabel_accuracy_from_logits(
                 output_x, label, threshold=self.eval_threshold).item(),
             "pseudo_pos_rate": pseudo_bin.float().mean().item() * 100.0,
+            "pseudo_classes": pseudo_bin.sum(dim=1).float().mean().item(),
+            "pseudo_prob": pseudo_label.mean().item(),
             "pseudo_conf_rate": confident.float().mean().item() * 100.0,
         }
         return loss_x, loss_x2, loss_u, loss_u2, loss_im, info
