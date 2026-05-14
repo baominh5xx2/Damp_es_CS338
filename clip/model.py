@@ -418,7 +418,8 @@ class CLIP(nn.Module):
         logits_per_image = logit_scale * image_features @ text_features.t()
 
         # shape = [global_batch_size, global_batch_size]
-        logits_per_image = logits_per_image.softmax(dim=-1)
+        if getattr(self, "cam_score", "softmax") == "softmax":
+            logits_per_image = logits_per_image.softmax(dim=-1)
 
         return logits_per_image, attn_weight
 

@@ -49,6 +49,7 @@ def inspect_one(args, entry):
 
     cam = np.load(cam_path, allow_pickle=True).item()
     cams = cam[args.cam_type]
+    cams_stats = cams.astype(np.float32, copy=False)
     keys = cam["keys"].astype(np.int64)
     gt_raw = np.asarray(Image.open(gt_path), dtype=np.uint8)
     gt = _mapped_gt(args.dataset, gt_raw)
@@ -85,12 +86,12 @@ def inspect_one(args, entry):
     print(
         "cams: "
         f"shape={tuple(cams.shape)} dtype={cams.dtype} "
-        f"finite={np.isfinite(cams).all()} "
-        f"min={float(np.nanmin(cams)):.6f} "
-        f"max={float(np.nanmax(cams)):.6f} "
-        f"mean={float(np.nanmean(cams)):.6f}"
+        f"finite={np.isfinite(cams_stats).all()} "
+        f"min={float(np.nanmin(cams_stats)):.6f} "
+        f"max={float(np.nanmax(cams_stats)):.6f} "
+        f"mean={float(np.nanmean(cams_stats)):.6f}"
     )
-    print(f"channel max: {[float(x) for x in np.nanmax(cams, axis=(1, 2)).tolist()]}")
+    print(f"channel max: {[float(x) for x in np.nanmax(cams_stats, axis=(1, 2)).tolist()]}")
     print(f"gt raw unique: {_counts(gt_raw)}")
     print(f"gt mapped unique: {_counts(gt)}")
     print(f"pred bg unique: {_counts(pred_bg_mapped)}  pixel_acc={acc_bg:.6f}")

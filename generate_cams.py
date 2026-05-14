@@ -56,12 +56,20 @@ def main():
                         help="Number of context tokens (-1 = auto-detect from ckpt)")
     parser.add_argument("--damp_mix_alpha", type=float, default=1.0,
                         help="Blend weight: 1.0=DAMP only, 0.0=zero-shot only")
+    parser.add_argument("--damp_disable_decoder", action="store_true",
+                        help="Use learned DAMP prompt embeddings without context_decoder/gamma_t")
     parser.add_argument("--damp_name_mode", type=str, default="train",
                         choices=["train", "plain", "synonym"],
                         help=(
                             "Class-name strings used to rebuild DAMP prompts: "
                             "train=match the DAMP training dataset, plain=vanilla "
                             "class names, synonym=CLIP-ES synonym-expanded names."
+                        ))
+    parser.add_argument("--cam_score", type=str, default="auto",
+                        choices=["auto", "softmax", "raw"],
+                        help=(
+                            "Score used for Grad-CAM targets. auto keeps original softmax for "
+                            "zero-shot and uses raw multi-label logits for DAMP checkpoints."
                         ))
     parser.add_argument("--damp_use_plain_names", dest="damp_name_mode",
                         action="store_const", const="plain",

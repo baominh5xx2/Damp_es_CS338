@@ -206,7 +206,8 @@ def _encode_text_with_prompt_embeddings(model, prompt_embeddings, tokenized_prom
     return text_features
 
 
-def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
+def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1,
+                           disable_decoder=False):
     """Load DAMP prompt learner + context_decoder from checkpoint.
 
     Returns (raw_text_features, context_decoder, gamma_t) or
@@ -256,7 +257,7 @@ def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
     # Load context_decoder if available
     ctx_dec_state = checkpoint.get("context_decoder") if isinstance(checkpoint, dict) else None
     context_decoder = None
-    if ctx_dec_state is not None:
+    if ctx_dec_state is not None and not disable_decoder:
         from trainers.damp import ContextDecoder
         from types import SimpleNamespace
 
@@ -275,6 +276,9 @@ def damp_prompt_classifier(classnames, model, ckpt_path, device, n_ctx=-1):
         context_decoder.load_state_dict(cleaned)
         context_decoder.eval()
         print(f"DAMP context_decoder loaded (gamma_t={gamma_t:.4f})")
+    elif ctx_dec_state is not None and disable_decoder:
+        gamma_t = 0.0
+        print("DAMP context_decoder disabled; using prompt-only text features")
 
     raw_text_features = _encode_text_with_prompt_embeddings(
         model, prompt_embeddings, tokenized_prompts,
@@ -417,6 +421,11 @@ def _precompute_labels(entries, args):
 def build_worker_components(args, device):
     ds_cfg = DATASET_CONFIGS[args.dataset]
     model, _ = clip.load(args.model, device=device)
+    cam_score = getattr(args, "cam_score", "auto")
+    if cam_score == "auto":
+        cam_score = "raw" if args.damp_prompt_ckpt else "softmax"
+    model.cam_score = cam_score
+    print(f"CAM score mode: {cam_score}")
 
     bg_text_features = zeroshot_classifier(
         ds_cfg["bg_categories"], ["a clean origami {}."], model, device
@@ -432,6 +441,7 @@ def build_worker_components(args, device):
 
         damp_text_features, context_decoder, gamma_t = damp_prompt_classifier(
             damp_classnames, model, args.damp_prompt_ckpt, device, args.damp_n_ctx,
+            disable_decoder=bool(getattr(args, "damp_disable_decoder", False)),
         )
 
         # Map DAMP features to Cityscapes-19 aligned index space if needed
