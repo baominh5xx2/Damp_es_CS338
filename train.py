@@ -56,6 +56,10 @@ def extend_cfg(cfg):
     cfg.TRAINER.DAMP.CSC = False
     cfg.TRAINER.DAMP.PREC = "fp16"
     cfg.TRAINER.DAMP.TAU = 0.5
+    # Temperature used only when converting logits to pseudo-label probabilities.
+    # <= 0 means divide by CLIP's learned logit_scale, which keeps sigmoid
+    # thresholds meaningful for multi-label pseudo labels.
+    cfg.TRAINER.DAMP.PSEUDO_TEMP = 0.0
     cfg.TRAINER.DAMP.U = 1.0
     cfg.TRAINER.DAMP.IND = 1.0
     cfg.TRAINER.DAMP.IM = 1.0

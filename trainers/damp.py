@@ -839,9 +839,18 @@ class DAMP(TrainerXU):
 
     def _multilabel_losses(self, output_x, output_x2, output_u, output_u2,
                            pseudo_label_logits, label, mix_lambda):
+        pseudo_temp = float(getattr(self.cfg.TRAINER.DAMP, "PSEUDO_TEMP", 0.0))
+        if pseudo_temp > 0:
+            pseudo_temp = output_u.new_tensor(pseudo_temp)
+        else:
+            pseudo_temp = self.model.logit_scale.exp().detach().to(
+                device=output_u.device, dtype=output_u.dtype
+            )
+        pseudo_temp = pseudo_temp.clamp_min(1.0)
+
         pseudo_label = (
-            torch.sigmoid(output_u) * mix_lambda
-            + torch.sigmoid(pseudo_label_logits) * (1 - mix_lambda)
+            torch.sigmoid(output_u / pseudo_temp) * mix_lambda
+            + torch.sigmoid(pseudo_label_logits / pseudo_temp) * (1 - mix_lambda)
         ).detach()
         pseudo_bin = (pseudo_label >= self.pseudo_threshold).float()
         confident = pseudo_bin.sum(dim=1) > 0
@@ -868,6 +877,7 @@ class DAMP(TrainerXU):
             "pseudo_pos_rate": pseudo_bin.float().mean().item() * 100.0,
             "pseudo_classes": pseudo_bin.sum(dim=1).float().mean().item(),
             "pseudo_prob": pseudo_label.mean().item(),
+            "pseudo_temp": pseudo_temp.item(),
             "pseudo_conf_rate": confident.float().mean().item() * 100.0,
         }
         return loss_x, loss_x2, loss_u, loss_u2, loss_im, info
