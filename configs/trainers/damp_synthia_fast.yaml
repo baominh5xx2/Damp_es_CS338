@@ -1,15 +1,15 @@
 DATALOADER:
   TRAIN_X:
-    BATCH_SIZE: 64
+    BATCH_SIZE: 32
     N_DOMAIN: 0
     SAMPLER: RandomSampler
   TRAIN_U:
-    BATCH_SIZE: 64
+    BATCH_SIZE: 32
     N_DOMAIN: 0
     SAMPLER: RandomSampler
   TEST:
-    BATCH_SIZE: 128
-  NUM_WORKERS: 8
+    BATCH_SIZE: 256
+  NUM_WORKERS: 32 
 
 DATASET:
   NAME: SYNTHIA
@@ -22,6 +22,14 @@ INPUT:
   SIZE:
     - 224
     - 224
+  PIXEL_MEAN:
+    - 0.48145466
+    - 0.4578275
+    - 0.40821073
+  PIXEL_STD:
+    - 0.26862954
+    - 0.26130258
+    - 0.27577711
   INTERPOLATION: bicubic
   TRANSFORMS:
     - random_resized_crop
@@ -35,8 +43,8 @@ MODEL:
 
 OPTIM:
   NAME: sgd
-  LR: 0.008
-  MAX_EPOCH: 20
+  LR: 0.0008
+  MAX_EPOCH: 3
   LR_SCHEDULER: cosine
   WARMUP_EPOCH: 1
   WARMUP_TYPE: linear
@@ -44,8 +52,8 @@ OPTIM:
 
 OPTIM_C:
   NAME: sgd
-  LR: 0.008
-  MAX_EPOCH: 20
+  LR: 0.0008
+  MAX_EPOCH: 3
   LR_SCHEDULER: cosine
   WARMUP_EPOCH: 1
   WARMUP_TYPE: linear
@@ -53,7 +61,7 @@ OPTIM_C:
 
 TRAIN:
   PRINT_FREQ: 20
-  CHECKPOINT_FREQ: 5
+  CHECKPOINT_FREQ: 1
   COUNT_ITER: train_x
 
 TEST:
@@ -66,7 +74,8 @@ TRAINER:
     N_CTX: 16
     CSC: false
     PREC: amp
-    TAU: 0.55
+    TAU: 0.52
+    PSEUDO_TEMP: 0.0
     U: 1.0
     STRONG_TRANSFORMS:
       - random_flip
