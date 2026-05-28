@@ -924,8 +924,10 @@ class DAMP(TrainerXU):
         mp = mtp / (mtp + mfp + eps)
         mr = mtp / (mtp + mfn + eps)
         micro_f1 = 2 * mp * mr / (mp + mr + eps)
-        class_f1 = 2 * (tp / (tp + fp + eps)) * (tp / (tp + fn + eps)) \
-                   / ((tp / (tp + fp + eps)) + (tp / (tp + fn + eps)) + eps)
+        class_precision = tp / (tp + fp + eps)
+        class_recall = tp / (tp + fn + eps)
+        class_f1 = 2 * class_precision * class_recall \
+                   / (class_precision + class_recall + eps)
         macro_f1 = class_f1.mean()
 
         label_acc = (label_correct / max(label_total, 1)) * 100.0
@@ -936,11 +938,38 @@ class DAMP(TrainerXU):
         print(f"* exact_match_acc: {exact_acc:.2f}%")
         print(f"* micro_f1: {float(micro_f1) * 100.0:.2f}%")
         print(f"* macro_f1: {float(macro_f1) * 100.0:.2f}%")
+        print("* note: micro_f1 and macro_f1 are aggregate metrics; "
+              "per-class precision/recall/f1 is reported below.")
+        print("* per_class_result:")
+        print(f"  {'id':>2s} {'class':<16s} {'support':>8s} {'pred':>8s} "
+              f"{'precision':>10s} {'recall':>10s} {'f1':>10s}")
+        print(f"  {'--':>2s} {'-' * 16:<16s} {'-' * 8:>8s} {'-' * 8:>8s} "
+              f"{'-' * 10:>10s} {'-' * 10:>10s} {'-' * 10:>10s}")
+        classnames = getattr(self.dm.dataset, "classnames", None)
+        if classnames is None:
+            classnames = [str(i) for i in range(K)]
+        for cid in range(K):
+            cname = str(classnames[cid]) if cid < len(classnames) else str(cid)
+            support = int((tp[cid] + fn[cid]).item())
+            pred_pos = int((tp[cid] + fp[cid]).item())
+            precision = float(class_precision[cid]) * 100.0
+            recall = float(class_recall[cid]) * 100.0
+            f1 = float(class_f1[cid]) * 100.0
+            print(f"  {cid:>2d} {cname:<16.16s} {support:>8d} {pred_pos:>8d} "
+                  f"{precision:>10.2f} {recall:>10.2f} {f1:>10.2f}")
 
         self.write_scalar(f"{split}/multilabel_acc", label_acc, self.epoch)
         self.write_scalar(f"{split}/exact_match_acc", exact_acc, self.epoch)
         self.write_scalar(f"{split}/micro_f1", float(micro_f1) * 100.0, self.epoch)
         self.write_scalar(f"{split}/macro_f1", float(macro_f1) * 100.0, self.epoch)
+        for cid in range(K):
+            cname = str(classnames[cid]) if cid < len(classnames) else str(cid)
+            scalar_name = cname.replace(" ", "_")
+            self.write_scalar(
+                f"{split}/per_class_f1/{scalar_name}",
+                float(class_f1[cid]) * 100.0,
+                self.epoch,
+            )
         return float(micro_f1) * 100.0
 
     # ............................................................ save/load
