@@ -92,6 +92,11 @@ def main():
                         help="Load model from this directory (for eval)")
     parser.add_argument("--load-epoch", type=int, default=None,
                         help="Load checkpoint from this epoch (None=best)")
+    parser.add_argument("--eval-threshold-sweep", action="store_true",
+                        help="During eval-only, sweep decision thresholds")
+    parser.add_argument("--eval-thresholds", type=str,
+                        default="0.50,0.55,0.60,0.65,0.70,0.75,0.80,0.85,0.90,0.95",
+                        help="Comma-separated thresholds for --eval-threshold-sweep")
     parser.add_argument("opts", default=None, nargs=argparse.REMAINDER,
                         help="Override config keys (e.g. DATASET.ROOT /data)")
     args = parser.parse_args()
@@ -114,6 +119,11 @@ def main():
 
     if args.eval_only:
         trainer.load_model(args.model_dir, epoch=args.load_epoch)
+        trainer.eval_threshold_sweep = args.eval_threshold_sweep
+        trainer.eval_thresholds = [
+            float(x.strip()) for x in args.eval_thresholds.split(",")
+            if x.strip()
+        ]
         trainer.test()
         return
 

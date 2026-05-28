@@ -914,6 +914,7 @@ class DAMP(TrainerXU):
         tp = torch.zeros(K, dtype=torch.float64)
         fp = torch.zeros(K, dtype=torch.float64)
         fn = torch.zeros(K, dtype=torch.float64)
+        all_probs, all_labels = [], []
 
         for batch in self.test_loader:
             inp = batch["img"].to(self.device)
@@ -926,7 +927,10 @@ class DAMP(TrainerXU):
             out = self.model_inference(inp)
             if isinstance(out, (tuple, list)):
                 out = out[0]
-            pred = (torch.sigmoid(out) >= self.eval_threshold).float().detach().cpu()
+            probs = torch.sigmoid(out).float().detach().cpu()
+            pred = (probs >= self.eval_threshold).float()
+            all_probs.append(probs)
+            all_labels.append(label)
 
             total += pred.size(0)
             exact += (pred == label).all(dim=1).sum().item()
@@ -974,6 +978,67 @@ class DAMP(TrainerXU):
             f1 = float(class_f1[cid]) * 100.0
             print(f"  {cid:>2d} {cname:<16.16s} {support:>8d} {pred_pos:>8d} "
                   f"{precision:>10.2f} {recall:>10.2f} {f1:>10.2f}")
+
+        if getattr(self, "eval_threshold_sweep", False) and all_probs:
+            probs_all = torch.cat(all_probs, dim=0)
+            labels_all = torch.cat(all_labels, dim=0)
+            thresholds = getattr(
+                self,
+                "eval_thresholds",
+                [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95],
+            )
+            print("* threshold_sweep:")
+            print(f"  {'thres':>6s} {'avg_pred_cls':>12s} {'label_acc':>10s} "
+                  f"{'exact':>10s} {'micro_f1':>10s} {'macro_f1':>10s}")
+            print(f"  {'-' * 6:>6s} {'-' * 12:>12s} {'-' * 10:>10s} "
+                  f"{'-' * 10:>10s} {'-' * 10:>10s} {'-' * 10:>10s}")
+            sweep_rows = []
+            for threshold in thresholds:
+                pred_t = (probs_all >= float(threshold)).float()
+                tp_t = ((pred_t == 1) & (labels_all == 1)).sum(dim=0).double()
+                fp_t = ((pred_t == 1) & (labels_all == 0)).sum(dim=0).double()
+                fn_t = ((pred_t == 0) & (labels_all == 1)).sum(dim=0).double()
+                mtp_t, mfp_t, mfn_t = tp_t.sum(), fp_t.sum(), fn_t.sum()
+                mp_t = mtp_t / (mtp_t + mfp_t + eps)
+                mr_t = mtp_t / (mtp_t + mfn_t + eps)
+                micro_t = 2 * mp_t * mr_t / (mp_t + mr_t + eps)
+                prec_t = tp_t / (tp_t + fp_t + eps)
+                rec_t = tp_t / (tp_t + fn_t + eps)
+                f1_t = 2 * prec_t * rec_t / (prec_t + rec_t + eps)
+                macro_t = f1_t.mean()
+                label_acc_t = (pred_t == labels_all).float().mean() * 100.0
+                exact_t = (pred_t == labels_all).all(dim=1).float().mean() * 100.0
+                avg_pred_cls = pred_t.sum(dim=1).float().mean()
+                sweep_rows.append(
+                    (float(threshold), float(avg_pred_cls), float(label_acc_t),
+                     float(exact_t), float(micro_t) * 100.0,
+                     float(macro_t) * 100.0, tp_t, fp_t, fn_t)
+                )
+                print(f"  {float(threshold):>6.2f} {float(avg_pred_cls):>12.2f} "
+                      f"{float(label_acc_t):>10.2f} {float(exact_t):>10.2f} "
+                      f"{float(micro_t) * 100.0:>10.2f} "
+                      f"{float(macro_t) * 100.0:>10.2f}")
+
+            best = max(sweep_rows, key=lambda row: row[5])
+            best_threshold, _, _, _, _, best_macro, best_tp, best_fp, best_fn = best
+            best_prec = best_tp / (best_tp + best_fp + eps)
+            best_rec = best_tp / (best_tp + best_fn + eps)
+            best_f1 = 2 * best_prec * best_rec / (best_prec + best_rec + eps)
+            print(f"* best_threshold_by_macro_f1: {best_threshold:.2f} "
+                  f"(macro_f1={best_macro:.2f}%)")
+            print("* best_threshold_per_class_result:")
+            print(f"  {'id':>2s} {'class':<16s} {'support':>8s} {'pred':>8s} "
+                  f"{'precision':>10s} {'recall':>10s} {'f1':>10s}")
+            print(f"  {'--':>2s} {'-' * 16:<16s} {'-' * 8:>8s} {'-' * 8:>8s} "
+                  f"{'-' * 10:>10s} {'-' * 10:>10s} {'-' * 10:>10s}")
+            for cid in range(K):
+                cname = str(classnames[cid]) if cid < len(classnames) else str(cid)
+                support = int((best_tp[cid] + best_fn[cid]).item())
+                pred_pos = int((best_tp[cid] + best_fp[cid]).item())
+                print(f"  {cid:>2d} {cname:<16.16s} {support:>8d} {pred_pos:>8d} "
+                      f"{float(best_prec[cid]) * 100.0:>10.2f} "
+                      f"{float(best_rec[cid]) * 100.0:>10.2f} "
+                      f"{float(best_f1[cid]) * 100.0:>10.2f}")
 
         self.write_scalar(f"{split}/multilabel_acc", label_acc, self.epoch)
         self.write_scalar(f"{split}/exact_match_acc", exact_acc, self.epoch)
