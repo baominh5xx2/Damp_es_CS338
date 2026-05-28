@@ -56,6 +56,19 @@ def load_clip_to_cpu(cfg):
     return clip.build_model(state_dict or model.state_dict())
 
 
+def load_checkpoint_compat(fpath):
+    """Load Dassl checkpoints on PyTorch >=2.6.
+
+    PyTorch 2.6 changed ``torch.load`` to default to ``weights_only=True``.
+    Dassl checkpoints include optimizer/scheduler objects, so trusted local
+    training checkpoints need ``weights_only=False``.
+    """
+    try:
+        return torch.load(fpath, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(fpath, map_location="cpu")
+
+
 # ---------------------------------------------------------------------------
 # Loss helpers
 # ---------------------------------------------------------------------------
@@ -1040,7 +1053,7 @@ class DAMP(TrainerXU):
             if not osp.exists(model_path):
                 raise FileNotFoundError(f'Model not found at "{model_path}"')
 
-            ckpt = load_checkpoint(model_path)
+            ckpt = load_checkpoint_compat(model_path)
             state_dict = ckpt["state_dict"]
             # Fixed token vectors are dataset-dependent; rebuild from current cfg.
             for k in ("token_prefix", "token_suffix"):
