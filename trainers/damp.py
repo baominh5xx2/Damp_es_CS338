@@ -1040,6 +1040,79 @@ class DAMP(TrainerXU):
                       f"{float(best_rec[cid]) * 100.0:>10.2f} "
                       f"{float(best_f1[cid]) * 100.0:>10.2f}")
 
+            print("* probability_stats:")
+            print(f"  {'id':>2s} {'class':<16s} {'mean':>8s} {'p01':>8s} "
+                  f"{'p50':>8s} {'p99':>8s} {'pos_mean':>9s} {'neg_mean':>9s}")
+            print(f"  {'--':>2s} {'-' * 16:<16s} {'-' * 8:>8s} {'-' * 8:>8s} "
+                  f"{'-' * 8:>8s} {'-' * 8:>8s} {'-' * 9:>9s} {'-' * 9:>9s}")
+            for cid in range(K):
+                cname = str(classnames[cid]) if cid < len(classnames) else str(cid)
+                p = probs_all[:, cid]
+                y = labels_all[:, cid].bool()
+                p01 = torch.quantile(p, 0.01).item()
+                p50 = torch.quantile(p, 0.50).item()
+                p99 = torch.quantile(p, 0.99).item()
+                pos_mean = p[y].mean().item() if y.any() else float("nan")
+                neg_mean = p[~y].mean().item() if (~y).any() else float("nan")
+                print(f"  {cid:>2d} {cname:<16.16s} {p.mean().item():>8.4f} "
+                      f"{p01:>8.4f} {p50:>8.4f} {p99:>8.4f} "
+                      f"{pos_mean:>9.4f} {neg_mean:>9.4f}")
+
+            print("* topk_sweep:")
+            print(f"  {'topk':>6s} {'avg_pred_cls':>12s} {'label_acc':>10s} "
+                  f"{'exact':>10s} {'micro_f1':>10s} {'macro_f1':>10s}")
+            print(f"  {'-' * 6:>6s} {'-' * 12:>12s} {'-' * 10:>10s} "
+                  f"{'-' * 10:>10s} {'-' * 10:>10s} {'-' * 10:>10s}")
+            topk_rows = []
+            for topk in range(1, K + 1):
+                pred_k = torch.zeros_like(probs_all)
+                idx = torch.topk(probs_all, k=topk, dim=1).indices
+                pred_k.scatter_(1, idx, 1.0)
+                tp_k = ((pred_k == 1) & (labels_all == 1)).sum(dim=0).double()
+                fp_k = ((pred_k == 1) & (labels_all == 0)).sum(dim=0).double()
+                fn_k = ((pred_k == 0) & (labels_all == 1)).sum(dim=0).double()
+                mtp_k, mfp_k, mfn_k = tp_k.sum(), fp_k.sum(), fn_k.sum()
+                mp_k = mtp_k / (mtp_k + mfp_k + eps)
+                mr_k = mtp_k / (mtp_k + mfn_k + eps)
+                micro_k = 2 * mp_k * mr_k / (mp_k + mr_k + eps)
+                prec_k = tp_k / (tp_k + fp_k + eps)
+                rec_k = tp_k / (tp_k + fn_k + eps)
+                f1_k = 2 * prec_k * rec_k / (prec_k + rec_k + eps)
+                macro_k = f1_k.mean()
+                label_acc_k = (pred_k == labels_all).float().mean() * 100.0
+                exact_k = (pred_k == labels_all).all(dim=1).float().mean() * 100.0
+                avg_pred_cls = pred_k.sum(dim=1).float().mean()
+                topk_rows.append(
+                    (int(topk), float(avg_pred_cls), float(label_acc_k),
+                     float(exact_k), float(micro_k) * 100.0,
+                     float(macro_k) * 100.0, tp_k, fp_k, fn_k)
+                )
+                print(f"  {topk:>6d} {float(avg_pred_cls):>12.2f} "
+                      f"{float(label_acc_k):>10.2f} {float(exact_k):>10.2f} "
+                      f"{float(micro_k) * 100.0:>10.2f} "
+                      f"{float(macro_k) * 100.0:>10.2f}")
+
+            best_k = max(topk_rows, key=lambda row: row[5])
+            best_topk, _, _, _, _, best_topk_macro, topk_tp, topk_fp, topk_fn = best_k
+            topk_prec = topk_tp / (topk_tp + topk_fp + eps)
+            topk_rec = topk_tp / (topk_tp + topk_fn + eps)
+            topk_f1 = 2 * topk_prec * topk_rec / (topk_prec + topk_rec + eps)
+            print(f"* best_topk_by_macro_f1: {best_topk} "
+                  f"(macro_f1={best_topk_macro:.2f}%)")
+            print("* best_topk_per_class_result:")
+            print(f"  {'id':>2s} {'class':<16s} {'support':>8s} {'pred':>8s} "
+                  f"{'precision':>10s} {'recall':>10s} {'f1':>10s}")
+            print(f"  {'--':>2s} {'-' * 16:<16s} {'-' * 8:>8s} {'-' * 8:>8s} "
+                  f"{'-' * 10:>10s} {'-' * 10:>10s} {'-' * 10:>10s}")
+            for cid in range(K):
+                cname = str(classnames[cid]) if cid < len(classnames) else str(cid)
+                support = int((topk_tp[cid] + topk_fn[cid]).item())
+                pred_pos = int((topk_tp[cid] + topk_fp[cid]).item())
+                print(f"  {cid:>2d} {cname:<16.16s} {support:>8d} {pred_pos:>8d} "
+                      f"{float(topk_prec[cid]) * 100.0:>10.2f} "
+                      f"{float(topk_rec[cid]) * 100.0:>10.2f} "
+                      f"{float(topk_f1[cid]) * 100.0:>10.2f}")
+
         self.write_scalar(f"{split}/multilabel_acc", label_acc, self.epoch)
         self.write_scalar(f"{split}/exact_match_acc", exact_acc, self.epoch)
         self.write_scalar(f"{split}/micro_f1", float(micro_f1) * 100.0, self.epoch)
