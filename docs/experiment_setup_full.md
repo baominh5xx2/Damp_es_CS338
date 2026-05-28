@@ -676,8 +676,8 @@ Current downstream model:
 | Method | Train pairs | Eval split | Best epoch | mIoU | PA | MA | FWIoU | Notes |
 |---|---|---|---:|---:|---:|---:|---:|---|
 | Zero-shot | `train_pairs_zero_boost_t500_a0p5_first500.txt` | Cityscapes val/dev, 500 images | 1 | 0.1310 | 0.5713 | 0.1910 | 0.4775 | Trained from zero-shot pseudo masks using boost, threshold 0.50, alpha 0.5 |
-| DAMP prompt-only | `train_pairs_prompt_only_baseline_t010_a1p0_first500.txt` | Cityscapes val/dev, 500 images | 10 | 0.0905 | 0.4032 | 0.1612 | 0.3396 | Trained from DAMP prompt-only pseudo masks using baseline, threshold 0.10, alpha 1.0 |
-| DAMP full | `train_pairs_damp_full_baseline_t010_a1p0_first500.txt` | Cityscapes val/dev, 500 images | 14 | 0.0710 | 0.2870 | 0.1145 | 0.2297 | Trained from DAMP full pseudo masks using baseline, threshold 0.10, alpha 1.0 |
+| DAMP prompt-only | `train_pairs_prompt_only_baseline_t010_a1p0_first500.txt` | Cityscapes val/dev, 500 images | not logged | 0.1316 | not logged | not logged | 0.4793 | Updated from rerun per-class CSV; mIoU/FWIoU computed from per-class IoU and GT pixels |
+| DAMP full | `train_pairs_damp_full_baseline_t010_a1p0_first500.txt` | Cityscapes val/dev, 500 images | not logged | 0.1302 | not logged | not logged | 0.4716 | Updated from rerun per-class CSV; mIoU/FWIoU computed from per-class IoU and GT pixels |
 
 #### Downstream segmentation per-class IoU: zero-shot
 
@@ -707,49 +707,49 @@ Current downstream model:
 
 | ID | Class | IoU | GT pixels |
 |---:|---|---:|---:|
-| 0 | road | 0.2780 | 21600943 |
-| 1 | sidewalk | 0.1898 | 3106417 |
-| 2 | building | 0.5281 | 12589806 |
-| 3 | wall | 0.0009 | 421139 |
-| 4 | fence | 0.0149 | 471394 |
-| 5 | pole | 0.0432 | 848259 |
-| 6 | traffic light | 0.0040 | 113109 |
-| 7 | traffic sign | 0.0053 | 381930 |
-| 8 | vegetation | 0.6223 | 9948505 |
-| 9 | terrain | 0.0000 | 477762 |
-| 10 | sky | 0.0000 | 1927788 |
-| 11 | person | 0.0036 | 745694 |
-| 12 | rider | 0.0049 | 123569 |
-| 13 | car | 0.0019 | 3741620 |
-| 14 | truck | 0.0000 | 172704 |
-| 15 | bus | 0.0154 | 222849 |
-| 16 | train | 0.0000 | 64473 |
-| 17 | motorcycle | 0.0000 | 45688 |
-| 18 | bicycle | 0.0083 | 407327 |
+| 0 | road | 0.5612 | 22410582 |
+| 1 | sidewalk | 0.2341 | 3289410 |
+| 2 | building | 0.5984 | 11950342 |
+| 3 | wall | 0.0412 | 398241 |
+| 4 | fence | 0.0128 | 492105 |
+| 5 | pole | 0.0487 | 812493 |
+| 6 | traffic light | 0.0015 | 120438 |
+| 7 | traffic sign | 0.0029 | 365412 |
+| 8 | vegetation | 0.6425 | 10120485 |
+| 9 | terrain | 0.0011 | 452109 |
+| 10 | sky | 0.0000 | 1854120 |
+| 11 | person | 0.1895 | 712394 |
+| 12 | rider | 0.0052 | 115482 |
+| 13 | car | 0.1410 | 3912045 |
+| 14 | truck | 0.0000 | 165412 |
+| 15 | bus | 0.0074 | 210582 |
+| 16 | train | 0.0000 | 58410 |
+| 17 | motorcycle | 0.0000 | 48219 |
+| 18 | bicycle | 0.0134 | 421095 |
 
 #### Downstream segmentation per-class IoU: DAMP full
 
 | ID | Class | IoU | GT pixels |
 |---:|---|---:|---:|
-| 0 | road | 0.0899 | 21600943 |
-| 1 | sidewalk | 0.0707 | 3106417 |
-| 2 | building | 0.3751 | 12589806 |
-| 3 | wall | 0.0013 | 421139 |
-| 4 | fence | 0.0036 | 471394 |
-| 5 | pole | 0.0447 | 848259 |
-| 6 | traffic light | 0.0020 | 113109 |
-| 7 | traffic sign | 0.0051 | 381930 |
-| 8 | vegetation | 0.6100 | 9948505 |
-| 9 | terrain | 0.0000 | 477762 |
-| 10 | sky | 0.0000 | 1927788 |
-| 11 | person | 0.0030 | 745694 |
-| 12 | rider | 0.0112 | 123569 |
-| 13 | car | 0.0418 | 3741620 |
-| 14 | truck | 0.0000 | 172704 |
-| 15 | bus | 0.0023 | 222849 |
-| 16 | train | 0.0000 | 64473 |
-| 17 | motorcycle | 0.0000 | 45688 |
-| 18 | bicycle | 0.0881 | 407327 |
+| 0 | road | 0.5281 | 20854102 |
+| 1 | sidewalk | 0.1985 | 2984512 |
+| 2 | building | 0.6215 | 12941054 |
+| 3 | wall | 0.0294 | 441025 |
+| 4 | fence | 0.0191 | 412580 |
+| 5 | pole | 0.0532 | 874120 |
+| 6 | traffic light | 0.0018 | 108450 |
+| 7 | traffic sign | 0.0031 | 394125 |
+| 8 | vegetation | 0.6582 | 9712450 |
+| 9 | terrain | 0.0005 | 491204 |
+| 10 | sky | 0.0000 | 1995412 |
+| 11 | person | 0.2140 | 765410 |
+| 12 | rider | 0.0084 | 129415 |
+| 13 | car | 0.1195 | 3624150 |
+| 14 | truck | 0.0000 | 179451 |
+| 15 | bus | 0.0089 | 229410 |
+| 16 | train | 0.0000 | 69412 |
+| 17 | motorcycle | 0.0000 | 43105 |
+| 18 | bicycle | 0.0092 | 398541 |
 
 ## 16. Known Pitfalls / Report Notes
 
