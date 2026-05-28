@@ -901,7 +901,11 @@ class DAMP(TrainerXU):
         self.set_model_mode("eval")
         if split is None:
             split = self.cfg.TEST.SPLIT
-        print(f"Do evaluation on {split} set")
+        display_split = split
+        dataset_name = str(getattr(self.cfg.DATASET, "NAME", "")).lower()
+        if split == "test" and dataset_name in {"synthia", "gta5"}:
+            display_split = "dev/val (cityscapes_val; Dassl internal split: test)"
+        print(f"Do evaluation on {display_split} set")
         return self._test_multilabel(split)
 
     def _test_multilabel(self, split):
