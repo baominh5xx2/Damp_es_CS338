@@ -667,15 +667,17 @@ Current downstream model:
 - Train split: exported SYNTHIA pseudo-label pairs from `train_first500.txt`
 - Eval split: Cityscapes val/dev, 500 images
 - Training size: resized to `256 x 512`
-- Epochs: 3
+- Epochs: 15 for the final DAMP downstream run; zero-shot was first logged with 3 epochs
+- Batch size: 32 for the final DAMP downstream run
+- Learning rate: `0.0007` for the final DAMP downstream run
 
 #### Downstream segmentation summary
 
 | Method | Train pairs | Eval split | Best epoch | mIoU | PA | MA | FWIoU | Notes |
 |---|---|---|---:|---:|---:|---:|---:|---|
 | Zero-shot | `train_pairs_zero_boost_t500_a0p5_first500.txt` | Cityscapes val/dev, 500 images | 1 | 0.1310 | 0.5713 | 0.1910 | 0.4775 | Trained from zero-shot pseudo masks using boost, threshold 0.50, alpha 0.5 |
-| DAMP prompt-only | pending | Cityscapes val/dev, 500 images | pending | pending | pending | pending | pending | Fill after downstream run finishes |
-| DAMP full | pending | Cityscapes val/dev, 500 images | pending | pending | pending | pending | pending | Fill after downstream run finishes |
+| DAMP prompt-only | `train_pairs_prompt_only_baseline_t010_a1p0_first500.txt` | Cityscapes val/dev, 500 images | 10 | 0.0905 | 0.4032 | 0.1612 | 0.3396 | Trained from DAMP prompt-only pseudo masks using baseline, threshold 0.10, alpha 1.0 |
+| DAMP full | `train_pairs_damp_full_baseline_t010_a1p0_first500.txt` | Cityscapes val/dev, 500 images | 14 | 0.0710 | 0.2870 | 0.1145 | 0.2297 | Trained from DAMP full pseudo masks using baseline, threshold 0.10, alpha 1.0 |
 
 #### Downstream segmentation per-class IoU: zero-shot
 
@@ -700,6 +702,54 @@ Current downstream model:
 | 16 | train | 0.0000 | 64473 |
 | 17 | motorcycle | 0.0000 | 45688 |
 | 18 | bicycle | 0.0101 | 407327 |
+
+#### Downstream segmentation per-class IoU: DAMP prompt-only
+
+| ID | Class | IoU | GT pixels |
+|---:|---|---:|---:|
+| 0 | road | 0.2780 | 21600943 |
+| 1 | sidewalk | 0.1898 | 3106417 |
+| 2 | building | 0.5281 | 12589806 |
+| 3 | wall | 0.0009 | 421139 |
+| 4 | fence | 0.0149 | 471394 |
+| 5 | pole | 0.0432 | 848259 |
+| 6 | traffic light | 0.0040 | 113109 |
+| 7 | traffic sign | 0.0053 | 381930 |
+| 8 | vegetation | 0.6223 | 9948505 |
+| 9 | terrain | 0.0000 | 477762 |
+| 10 | sky | 0.0000 | 1927788 |
+| 11 | person | 0.0036 | 745694 |
+| 12 | rider | 0.0049 | 123569 |
+| 13 | car | 0.0019 | 3741620 |
+| 14 | truck | 0.0000 | 172704 |
+| 15 | bus | 0.0154 | 222849 |
+| 16 | train | 0.0000 | 64473 |
+| 17 | motorcycle | 0.0000 | 45688 |
+| 18 | bicycle | 0.0083 | 407327 |
+
+#### Downstream segmentation per-class IoU: DAMP full
+
+| ID | Class | IoU | GT pixels |
+|---:|---|---:|---:|
+| 0 | road | 0.0899 | 21600943 |
+| 1 | sidewalk | 0.0707 | 3106417 |
+| 2 | building | 0.3751 | 12589806 |
+| 3 | wall | 0.0013 | 421139 |
+| 4 | fence | 0.0036 | 471394 |
+| 5 | pole | 0.0447 | 848259 |
+| 6 | traffic light | 0.0020 | 113109 |
+| 7 | traffic sign | 0.0051 | 381930 |
+| 8 | vegetation | 0.6100 | 9948505 |
+| 9 | terrain | 0.0000 | 477762 |
+| 10 | sky | 0.0000 | 1927788 |
+| 11 | person | 0.0030 | 745694 |
+| 12 | rider | 0.0112 | 123569 |
+| 13 | car | 0.0418 | 3741620 |
+| 14 | truck | 0.0000 | 172704 |
+| 15 | bus | 0.0023 | 222849 |
+| 16 | train | 0.0000 | 64473 |
+| 17 | motorcycle | 0.0000 | 45688 |
+| 18 | bicycle | 0.0881 | 407327 |
 
 ## 16. Known Pitfalls / Report Notes
 
