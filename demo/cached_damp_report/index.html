@@ -280,41 +280,6 @@
       pointer-events: none;
     }
 
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      padding: 16px 18px 18px;
-      background: var(--panel);
-      border-top: 1px solid var(--line);
-    }
-
-    .metric {
-      border: 1px solid var(--line);
-      background: #12161d;
-      border-radius: 8px;
-      padding: 12px;
-      min-height: 92px;
-    }
-
-    .metric .name {
-      color: var(--muted);
-      font-size: 13px;
-      margin-bottom: 8px;
-    }
-
-    .metric .value {
-      font-size: 28px;
-      line-height: 1;
-      font-weight: 850;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .metric.best {
-      border-color: rgba(76, 201, 168, 0.58);
-      background: rgba(76, 201, 168, 0.09);
-    }
-
     .note {
       margin: 14px 0 0;
       color: var(--muted);
@@ -336,9 +301,6 @@
         justify-content: start;
       }
 
-      .metrics {
-        grid-template-columns: 1fr;
-      }
     }
   </style>
 </head>
@@ -391,21 +353,6 @@
           </div>
           <img src="assets/damp_full_output.png" alt="DAMP full segmentation overlay">
         </div>
-
-        <div class="metrics">
-          <div class="metric">
-            <div class="name">Zero-shot mIoU</div>
-            <div class="value">0.1310</div>
-          </div>
-          <div class="metric best">
-            <div class="name">DAMP Prompt-only mIoU</div>
-            <div class="value">0.1316</div>
-          </div>
-          <div class="metric">
-            <div class="name">DAMP Full mIoU</div>
-            <div class="value">0.1302</div>
-          </div>
-        </div>
       </section>
     </section>
   </main>
@@ -430,7 +377,7 @@
       "[00:07] selecting DAMP pseudo-label source",
       "[00:09] mapping labels to Cityscapes train IDs",
       "[00:11] overlay ready: damp_full qualitative sample",
-      "[00:12] downstream mIoU: prompt-only=0.1316, zero=0.1310, full=0.1302"
+      "[00:12] downstream summary cached for report"
     ];
 
     const stepsEl = document.getElementById("steps");
